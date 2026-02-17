@@ -14,12 +14,6 @@ jobs:
       run:
         working-directory: amavel_app
 
-    env:
-      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-      GOOGLE_CLOUD_KEY: ${{ secrets.GOOGLE_CLOUD_KEY }}
-      AZURE_SPEECH_KEY: ${{ secrets.AZURE_SPEECH_KEY }}
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -37,9 +31,22 @@ jobs:
           channel: stable
           cache: true
 
-      - name: Generate missing Android scaffolding
+      - name: Remove old Android build files
         run: |
-          flutter create --org com.amavel --project-name amavel_app --platforms android .
+          rm -f android/build.gradle
+          rm -f android/app/build.gradle
+          rm -f android/settings.gradle
+
+      - name: Generate fresh Android project
+        run: flutter create --org com.amavel --project-name amavel_app --platforms android .
+
+      - name: Apply AMAVEL customizations
+        run: |
+          # Set minSdk to 26 for elderly device compatibility
+          sed -i 's/minSdk = flutter.minSdkVersion/minSdk = 26/' android/app/build.gradle
+
+          # Add INTERNET and RECORD_AUDIO permissions to AndroidManifest
+          sed -i 's/<\/manifest>/    <uses-permission android:name="android.permission.RECORD_AUDIO"\/>\n    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"\/>\n<\/manifest>/' android/app/src/main/AndroidManifest.xml
 
       - name: Install dependencies
         run: flutter pub get
@@ -50,8 +57,7 @@ jobs:
             --dart-define=OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }} \
             --dart-define=ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_API_KEY }} \
             --dart-define=GOOGLE_CLOUD_KEY=${{ secrets.GOOGLE_CLOUD_KEY }} \
-            --dart-define=AZURE_SPEECH_KEY=${{ secrets.AZURE_SPEECH_KEY }} \
-            --split-per-abi
+            --dart-define=AZURE_SPEECH_KEY=${{ secrets.AZURE_SPEECH_KEY }}
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
