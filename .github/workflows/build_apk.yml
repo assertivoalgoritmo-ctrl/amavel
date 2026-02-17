@@ -50,7 +50,7 @@ jobs:
             --split-per-abi
 
       - name: Upload APK artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: amavel-apk
           path: |
