@@ -40,16 +40,18 @@ jobs:
       - name: Generate fresh Android project
         run: flutter create --org com.amavel --project-name amavel_app --platforms android .
 
-      - name: Apply AMAVEL customizations
+     - name: Apply AMAVEL customizations
         run: |
+          # Find the correct build file (could be .gradle or .gradle.kts)
+          APP_BUILD=$(find android/app -name "build.gradle*" | head -1)
+          echo "Found build file: $APP_BUILD"
+          
           # Set minSdk to 26 for elderly device compatibility
-          sed -i 's/minSdk = flutter.minSdkVersion/minSdk = 26/' android/app/build.gradle
-
-          # Add INTERNET and RECORD_AUDIO permissions to AndroidManifest
-          sed -i 's/<\/manifest>/    <uses-permission android:name="android.permission.RECORD_AUDIO"\/>\n    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"\/>\n<\/manifest>/' android/app/src/main/AndroidManifest.xml
-
-      - name: Install dependencies
-        run: flutter pub get
+          sed -i 's/minSdk.*/minSdk = 26/' "$APP_BUILD"
+          
+          # Add permissions to AndroidManifest
+          MANIFEST="android/app/src/main/AndroidManifest.xml"
+          sed -i 's/<\/manifest>/    <uses-permission android:name="android.permission.RECORD_AUDIO"\/>\n    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"\/>\n<\/manifest>/' "$MANIFEST"
 
       - name: Build APK
         run: |
