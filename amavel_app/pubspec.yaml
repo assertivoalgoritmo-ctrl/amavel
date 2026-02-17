@@ -1,0 +1,69 @@
+name: amavel_app
+description: AMAVEL - Voice-first AI companion for Portuguese seniors
+publish_to: 'none'
+version: 0.1.0+1
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_localizations:
+    sdk: flutter
+
+  # Firebase
+  firebase_core: ^2.27.2
+  firebase_auth: ^4.19.3
+  cloud_firestore: ^4.17.3
+  firebase_messaging: ^14.8.3
+  firebase_storage: ^11.7.3
+
+  # State Management
+  flutter_riverpod: ^2.5.1
+  riverpod_annotation: ^2.3.5
+
+  # Voice & Audio
+  record: ^5.1.2
+  just_audio: ^0.9.39
+  permission_handler: ^11.3.1
+  web_socket_channel: ^2.4.5
+
+  # HTTP
+  http: ^1.2.1
+  dio: ^5.4.3
+
+  # UI & Animation
+  lottie: ^3.1.0
+  google_fonts: ^6.2.1
+
+  # Storage
+  shared_preferences: ^2.2.3
+
+  # Utilities
+  intl: ^0.19.0
+  uuid: ^4.4.0
+  connectivity_plus: ^6.0.3
+  logger: ^2.3.0
+  json_annotation: ^4.9.0
+  freezed_annotation: ^2.4.1
+  path_provider: ^2.1.3
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+  build_runner: ^2.4.9
+  json_serializable: ^6.8.0
+  freezed: ^2.5.2
+  riverpod_generator: ^2.4.0
+  mockito: ^5.4.4
+
+flutter:
+  uses-material-design: true
+  generate: true
+
+  assets:
+    - assets/images/
+    - assets/animations/
+    - assets/sounds/
