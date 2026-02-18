@@ -40,6 +40,11 @@ jobs:
       - name: Generate fresh Android project
         run: flutter create --org com.amavel --project-name amavel_app --platforms android .
 
+      - name: Place google-services.json
+        run: |
+          cp google-services.json android/app/google-services.json
+          echo "google-services.json placed successfully"
+
       - name: Create asset directories
         run: |
           mkdir -p assets/images assets/animations assets/sounds
