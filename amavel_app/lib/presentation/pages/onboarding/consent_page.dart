@@ -32,7 +32,7 @@ class _ConsentPageState extends State<ConsentPage> {
           SnackBar(
             content: Text(
               'Erro ao guardar consentimento. Por favor, tente novamente.',
-              style: AmavelTheme.bodyMedium,
+              style: TextStyle(fontSize: AmavelTheme.textSizeBody, color: Colors.white),
             ),
             backgroundColor: Colors.red,
           ),
