@@ -43,7 +43,7 @@ jobs:
           sed -i 's/<\/manifest>/    <uses-permission android:name="android.permission.RECORD_AUDIO"\/>\n    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"\/>\n<\/manifest>/' "$MANIFEST"
       - name: Fix record package for CI
         run: |
-          sed -i 's/record: ^5.2.0/record: ^5.2.1/' pubspec.yaml
+          sed -i 's/record: ^5.2.0/record: ^6.2.0/' pubspec.yaml
           flutter pub remove record_linux || true
       - name: Install dependencies
         run: flutter pub get
