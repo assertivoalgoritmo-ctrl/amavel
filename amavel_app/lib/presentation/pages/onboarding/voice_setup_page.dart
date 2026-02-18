@@ -56,7 +56,7 @@ class _VoiceSetupPageState extends State<VoiceSetupPage> {
           SnackBar(
             content: Text(
               'Erro ao solicitar permissão. Por favor, tente novamente.',
-              sstyle: TextStyle(fontSize: AmavelTheme.textSizeBody, color: Colors.white),
+              style: TextStyle(fontSize: AmavelTheme.textSizeBody, color: Colors.white),
             ),
             backgroundColor: Colors.red,
           ),
