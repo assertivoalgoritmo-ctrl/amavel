@@ -39,7 +39,7 @@ class _VoiceSetupPageState extends State<VoiceSetupPage> {
         await prefs.setBool('onboarding_complete', true);
 
         if (mounted) {
-          Navigator.of(context).pushReplacementNamed(AppConstants.homeRoute);
+          Navigator.of(context).pushReplacementNamed(AppConstants.routeHome);
         }
       } else if (status.isDenied) {
         if (mounted) {
