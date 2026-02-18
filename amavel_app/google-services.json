@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "193345910394",
+    "project_id": "amavelteste01fev",
+    "storage_bucket": "amavelteste01fev.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:193345910394:android:fd205307a9f1ae77416dc3",
+        "android_client_info": {
+          "package_name": "com.amavel.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAtp0xm6runyq-CNtfx8Vq6r59OHzGGQw4"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
