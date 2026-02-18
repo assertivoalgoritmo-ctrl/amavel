@@ -13,42 +13,62 @@ jobs:
     defaults:
       run:
         working-directory: amavel_app
+
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      GOOGLE_CLOUD_KEY: ${{ secrets.GOOGLE_CLOUD_KEY }}
+      AZURE_SPEECH_KEY: ${{ secrets.AZURE_SPEECH_KEY }}
+
     steps:
+      # Checkout code
       - name: Checkout code
         uses: actions/checkout@v4
+
+      # Setup JDK 17
       - name: Setup JDK 17
         uses: actions/setup-java@v3
         with:
           java-version: '17'
           distribution: 'temurin'
           cache: gradle
+
+      # Setup Flutter
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
           channel: stable
           cache: true
-      - name: Remove old Android build files
-        run: |
-          rm -f android/build.gradle
-          rm -f android/app/build.gradle
-          rm -f android/settings.gradle
-      - name: Generate fresh Android project
-        run: flutter create --org com.amavel --project-name amavel_app --platforms android .
-      - name: Apply AMAVEL customizations
-        run: |
-          APP_BUILD=$(find android/app -name "build.gradle*" | head -1)
-          echo "Found build file: $APP_BUILD"
-          sed -i 's/minSdk.*/minSdk = 26/' "$APP_BUILD"
-          MANIFEST="android/app/src/main/AndroidManifest.xml"
-          sed -i 's/<\/manifest>/    <uses-permission android:name="android.permission.RECORD_AUDIO"\/>\n    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"\/>\n<\/manifest>/' "$MANIFEST"
+
+      # Get Flutter dependencies
       - name: Install dependencies
         run: flutter pub get
+
+      # Build APK with --dart-define for API keys
       - name: Build APK
         run: |
-          flutter build apk --dart-define=OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }} --dart-define=ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_API_KEY }} --dart-define=GOOGLE_CLOUD_KEY=${{ secrets.GOOGLE_CLOUD_KEY }} --dart-define=AZURE_SPEECH_KEY=${{ secrets.AZURE_SPEECH_KEY }}
+          flutter build apk \
+            --dart-define=OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }} \
+            --dart-define=ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_API_KEY }} \
+            --dart-define=GOOGLE_CLOUD_KEY=${{ secrets.GOOGLE_CLOUD_KEY }} \
+            --dart-define=AZURE_SPEECH_KEY=${{ secrets.AZURE_SPEECH_KEY }} \
+            --split-per-abi
+
+      # Upload APK artifact
       - name: Upload APK artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v3
         with:
           name: amavel-apk
-          path: amavel_app/build/app/outputs/flutter-apk/app-*.apk
+          path: |
+            amavel_app/build/app/outputs/flutter-apk/app-*.apk
           retention-days: 30
+
+      # Display build status
+      - name: Build status
+        if: success()
+        run: echo "APK build completed successfully"
+
+      # Handle build failure
+      - name: Build failure notification
+        if: failure()
+        run: echo "APK build failed"
