@@ -45,28 +45,54 @@ jobs:
           mkdir -p assets/images assets/animations assets/sounds
           touch assets/images/.gitkeep assets/animations/.gitkeep assets/sounds/.gitkeep
 
-      - name: Apply AMAVEL customizations
+      - name: Set minSdk to 26
         run: |
           APP_BUILD=$(find android/app -name "build.gradle*" | head -1)
           echo "Found build file: $APP_BUILD"
           sed -i 's/minSdk.*/minSdk = 26/' "$APP_BUILD"
 
-      - name: Fix AndroidManifest permissions
+      - name: Write AndroidManifest
         run: |
-          python3 << 'PYEOF'
-          import os
-          manifest = "android/app/src/main/AndroidManifest.xml"
-          with open(manifest, "r") as f:
-              content = f.read()
-          permissions = """    <uses-permission android:name="android.permission.RECORD_AUDIO"/>
-              <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>"""
-          if "RECORD_AUDIO" not in content:
-              content = content.replace("</manifest>", permissions + "\n</manifest>")
-          with open(manifest, "w") as f:
-              f.write(content)
-          print("--- AndroidManifest.xml ---")
-          print(content)
-          PYEOF
+          cat > android/app/src/main/AndroidManifest.xml << 'XMLEOF'
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <uses-permission android:name="android.permission.INTERNET"/>
+              <uses-permission android:name="android.permission.RECORD_AUDIO"/>
+              <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
+              <application
+                  android:label="amavel_app"
+                  android:name="${applicationName}"
+                  android:icon="@mipmap/ic_launcher">
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true"
+                      android:launchMode="singleTop"
+                      android:taskAffinity=""
+                      android:theme="@style/LaunchTheme"
+                      android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
+                      android:hardwareAccelerated="true"
+                      android:windowSoftInputMode="adjustResize">
+                      <meta-data
+                          android:name="io.flutter.embedding.android.NormalTheme"
+                          android:resource="@style/NormalTheme"/>
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN"/>
+                          <category android:name="android.intent.category.LAUNCHER"/>
+                      </intent-filter>
+                  </activity>
+                  <meta-data
+                      android:name="flutterEmbedding"
+                      android:value="2"/>
+              </application>
+              <queries>
+                  <intent>
+                      <action android:name="android.intent.action.PROCESS_TEXT"/>
+                      <data android:mimeType="text/plain"/>
+                  </intent>
+              </queries>
+          </manifest>
+          XMLEOF
+          echo "--- AndroidManifest.xml ---"
+          cat android/app/src/main/AndroidManifest.xml
 
       - name: Install dependencies
         run: flutter pub get
