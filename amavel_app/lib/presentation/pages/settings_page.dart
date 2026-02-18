@@ -141,7 +141,7 @@ class _SettingsPageState extends State<SettingsPage> {
                           SnackBar(
                             content: Text(
                               'AMAVEL v1.0.0 - A sua companheira de confiança',
-                              style: AmavelTheme.bodyMedium,
+                              style: TextStyle(fontSize: AmavelTheme.textSizeBody, color: Colors.white),
                             ),
                             backgroundColor: AmavelTheme.primaryColor,
                           ),
