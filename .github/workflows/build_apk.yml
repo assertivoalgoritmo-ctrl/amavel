@@ -50,11 +50,23 @@ jobs:
           APP_BUILD=$(find android/app -name "build.gradle*" | head -1)
           echo "Found build file: $APP_BUILD"
           sed -i 's/minSdk.*/minSdk = 26/' "$APP_BUILD"
-          MANIFEST="android/app/src/main/AndroidManifest.xml"
-          sed -i '/<\/manifest>/i\    <uses-permission android:name="android.permission.RECORD_AUDIO"\/>' "$MANIFEST"
-          sed -i '/<\/manifest>/i\    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"\/>' "$MANIFEST"
-          echo "--- AndroidManifest.xml ---"
-          cat "$MANIFEST"
+
+      - name: Fix AndroidManifest permissions
+        run: |
+          python3 << 'PYEOF'
+          import os
+          manifest = "android/app/src/main/AndroidManifest.xml"
+          with open(manifest, "r") as f:
+              content = f.read()
+          permissions = """    <uses-permission android:name="android.permission.RECORD_AUDIO"/>
+              <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>"""
+          if "RECORD_AUDIO" not in content:
+              content = content.replace("</manifest>", permissions + "\n</manifest>")
+          with open(manifest, "w") as f:
+              f.write(content)
+          print("--- AndroidManifest.xml ---")
+          print(content)
+          PYEOF
 
       - name: Install dependencies
         run: flutter pub get
