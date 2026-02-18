@@ -1,30 +1,32 @@
 import 'dart:async';
 import 'dart:typed_data';
 
+import 'package:flutter_sound/flutter_sound.dart';
 import 'package:permission_handler/permission_handler.dart';
-import 'package:record/record.dart';
 
 import 'package:amavel_app/core/logger/app_logger.dart';
 
 /// Service for recording audio from the device microphone
-/// Records PCM16 audio at 24kHz in mono format
+/// Records PCM16 audio at 24kHz in mono format using flutter_sound
 class AudioRecorder {
   static const int _sampleRate = 24000;
   static const int _channels = 1;
-  static const AudioEncoder _encoder = AudioEncoder.pcm16bit;
-  static const Duration _chunkInterval = Duration(milliseconds: 250);
 
-  late final Record _recordPlugin;
-  late final StreamController<Uint8List> _audioStreamController;
-  late final StreamController<RecorderState> _stateController;
+  final FlutterSoundRecorder _recorder = FlutterSoundRecorder();
+  final StreamController<Uint8List> _audioStreamController =
+      StreamController<Uint8List>.broadcast();
+  final StreamController<RecorderState> _stateController =
+      StreamController<RecorderState>.broadcast();
 
   bool _isRecording = false;
-  Timer? _chunkTimer;
-  Uint8List _buffer = Uint8List(0);
+  bool _isInitialized = false;
+  StreamSubscription? _recordingDataSubscription;
 
   /// Stream of audio chunks (PCM16, 24kHz, mono)
-  /// Emits chunks approximately every 250ms
   Stream<Uint8List> get audioStream => _audioStreamController.stream;
+
+  /// Alias used by voice_providers.dart
+  Stream<Uint8List> onAudioDataStream() => audioStream;
 
   /// Stream of recorder state changes
   Stream<RecorderState> get stateStream => _stateController.stream;
@@ -32,10 +34,12 @@ class AudioRecorder {
   /// Whether the recorder is currently active
   bool get isRecording => _isRecording;
 
-  AudioRecorder() {
-    _recordPlugin = Record();
-    _audioStreamController = StreamController<Uint8List>.broadcast();
-    _stateController = StreamController<RecorderState>.broadcast();
+  /// Initialize the recorder — must be called before start
+  Future<void> _ensureInitialized() async {
+    if (_isInitialized) return;
+    await _recorder.openRecorder();
+    await _recorder.setSubscriptionDuration(const Duration(milliseconds: 50));
+    _isInitialized = true;
   }
 
   /// Start recording from the microphone
@@ -53,23 +57,32 @@ class AudioRecorder {
         throw Exception('Microphone permission denied');
       }
 
+      await _ensureInitialized();
+
       AppLogger.info('Starting audio recording');
 
-      // Start recording
-      await _recordPlugin.start(
-        encoder: _encoder,
+      // Create a StreamController to receive PCM data from the recorder
+      final recordingDataController = StreamController<Food>();
+
+      recordingDataController.stream.listen((food) {
+        if (food is FoodData && food.data != null) {
+          final data = Uint8List.fromList(food.data!);
+          if (!_audioStreamController.isClosed) {
+            _audioStreamController.add(data);
+          }
+        }
+      });
+
+      // Start recording to stream (PCM16, 24kHz, mono)
+      await _recorder.startRecorder(
+        toStream: recordingDataController.sink,
+        codec: Codec.pcm16,
         sampleRate: _sampleRate,
         numChannels: _channels,
       );
 
       _isRecording = true;
-      _buffer = Uint8List(0);
       _emitState(RecorderState.recording);
-
-      // Start chunk timer
-      _chunkTimer = Timer.periodic(_chunkInterval, (_) {
-        _emitChunk();
-      });
 
       AppLogger.info('Audio recording started at ${_sampleRate}Hz mono');
     } catch (e, st) {
@@ -80,7 +93,10 @@ class AudioRecorder {
     }
   }
 
-  /// Stop recording and return the final audio chunk
+  /// Alias used by voice_providers.dart
+  Future<void> start() => startRecording();
+
+  /// Stop recording and return empty buffer
   Future<Uint8List> stopRecording() async {
     if (!_isRecording) {
       AppLogger.warning('Not currently recording');
@@ -90,22 +106,15 @@ class AudioRecorder {
     try {
       AppLogger.info('Stopping audio recording');
 
-      // Cancel chunk timer
-      _chunkTimer?.cancel();
-      _chunkTimer = null;
-
-      // Get final recording path
-      final recordingPath = await _recordPlugin.stop();
+      await _recorder.stopRecorder();
+      _recordingDataSubscription?.cancel();
+      _recordingDataSubscription = null;
 
       _isRecording = false;
       _emitState(RecorderState.stopped);
 
-      // Return buffered audio (in a real implementation, you'd read from file)
-      final finalBuffer = _buffer;
-      _buffer = Uint8List(0);
-
-      AppLogger.info('Audio recording stopped. Final size: ${finalBuffer.length} bytes');
-      return finalBuffer;
+      AppLogger.info('Audio recording stopped');
+      return Uint8List(0);
     } catch (e, st) {
       AppLogger.error('Error stopping recording', e, st);
       _isRecording = false;
@@ -114,22 +123,19 @@ class AudioRecorder {
     }
   }
 
+  /// Alias used by voice_providers.dart
+  Future<void> stop() => stopRecording();
+
   /// Cancel current recording without saving
   Future<void> cancelRecording() async {
-    if (!_isRecording) {
-      return;
-    }
+    if (!_isRecording) return;
 
     try {
-      _chunkTimer?.cancel();
-      _chunkTimer = null;
-
-      await _recordPlugin.stop();
-
+      await _recorder.stopRecorder();
+      _recordingDataSubscription?.cancel();
+      _recordingDataSubscription = null;
       _isRecording = false;
-      _buffer = Uint8List(0);
       _emitState(RecorderState.stopped);
-
       AppLogger.info('Audio recording cancelled');
     } catch (e, st) {
       AppLogger.error('Error cancelling recording', e, st);
@@ -138,14 +144,10 @@ class AudioRecorder {
 
   /// Pause recording temporarily
   Future<void> pauseRecording() async {
-    if (!_isRecording) {
-      return;
-    }
+    if (!_isRecording) return;
 
     try {
-      await _recordPlugin.pause();
-      _chunkTimer?.cancel();
-      _chunkTimer = null;
+      await _recorder.pauseRecorder();
       _emitState(RecorderState.paused);
       AppLogger.info('Audio recording paused');
     } catch (e, st) {
@@ -156,15 +158,8 @@ class AudioRecorder {
   /// Resume recording after pause
   Future<void> resumeRecording() async {
     try {
-      await _recordPlugin.resume();
-      _isRecording = true;
+      await _recorder.resumeRecorder();
       _emitState(RecorderState.recording);
-
-      // Restart chunk timer
-      _chunkTimer = Timer.periodic(_chunkInterval, (_) {
-        _emitChunk();
-      });
-
       AppLogger.info('Audio recording resumed');
     } catch (e, st) {
       AppLogger.error('Error resuming recording', e, st);
@@ -183,19 +178,6 @@ class AudioRecorder {
     return status.isGranted;
   }
 
-  void _emitChunk() {
-    // In a real implementation with stream recording, you would get chunks from the recorder
-    // For now, we emit the accumulated buffer
-    if (_buffer.isNotEmpty) {
-      final chunk = Uint8List.fromList(_buffer);
-      _buffer = Uint8List(0);
-
-      if (!_audioStreamController.isClosed) {
-        _audioStreamController.add(chunk);
-      }
-    }
-  }
-
   void _emitState(RecorderState state) {
     if (!_stateController.isClosed) {
       _stateController.add(state);
@@ -205,13 +187,16 @@ class AudioRecorder {
   /// Clean up resources
   Future<void> dispose() async {
     try {
-      _chunkTimer?.cancel();
       if (_isRecording) {
         await stopRecording();
       }
+      _recordingDataSubscription?.cancel();
       await _audioStreamController.close();
       await _stateController.close();
-      _recordPlugin.dispose();
+      if (_isInitialized) {
+        await _recorder.closeRecorder();
+        _isInitialized = false;
+      }
       AppLogger.info('AudioRecorder disposed');
     } catch (e, st) {
       AppLogger.error('Error disposing AudioRecorder', e, st);
