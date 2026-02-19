@@ -31,15 +31,18 @@ class MainChatPage extends StatefulWidget {
 class _MainChatPageState extends State<MainChatPage> {
   // --- Voice state ---
   VoiceState _voiceState = VoiceState.idle;
-  String _assistantMessage = 'Olá! Toca no círculo para falar comigo.';
+  String _assistantMessage = 'Olá! Toque no círculo para falar comigo.';
   String _userMessage = '';
   String _errorMessage = '';
 
   // --- OpenAI WebSocket ---
   IOWebSocketChannel? _channel;
   bool _wsConnected = false;
+  bool _sessionReady = false;
   String _partialTranscript = '';
   List<int> _responseAudioBytes = [];
+  int _reconnectAttempts = 0;
+  static const int _maxReconnectAttempts = 3;
 
   // --- Audio recording (flutter_sound) ---
   final FlutterSoundRecorder _recorder = FlutterSoundRecorder();
@@ -70,6 +73,7 @@ class _MainChatPageState extends State<MainChatPage> {
 
   Future<void> _cleanup() async {
     try {
+      _sessionActive = false;
       await _stopRecording();
       await _disconnectWs();
       if (_recorderReady) {
@@ -93,6 +97,16 @@ class _MainChatPageState extends State<MainChatPage> {
   // ====================================================
 
   Future<void> _onOrbTap() async {
+    if (_voiceState == VoiceState.error) {
+      // Tap on error state resets and retries
+      _reconnectAttempts = 0;
+      _errorMessage = '';
+      await _endSession();
+      await Future.delayed(const Duration(milliseconds: 300));
+      await _startSession();
+      return;
+    }
+
     if (_sessionActive) {
       await _endSession();
     } else {
@@ -135,7 +149,7 @@ class _MainChatPageState extends State<MainChatPage> {
       _sessionActive = true;
       setState(() {
         _voiceState = VoiceState.listening;
-        _assistantMessage = 'Estou a ouvir... fala comigo!';
+        _assistantMessage = 'Estou a ouvir... fale comigo!';
       });
     } catch (e) {
       _setError('Erro ao iniciar: $e');
@@ -144,13 +158,16 @@ class _MainChatPageState extends State<MainChatPage> {
 
   Future<void> _endSession() async {
     _sessionActive = false;
+    _sessionReady = false;
     await _stopRecording();
     await _disconnectWs();
-    setState(() {
-      _voiceState = VoiceState.idle;
-      _assistantMessage = 'Toca no círculo para falar comigo.';
-      _userMessage = '';
-    });
+    if (mounted) {
+      setState(() {
+        _voiceState = VoiceState.idle;
+        _assistantMessage = 'Toque no círculo para falar comigo.';
+        _userMessage = '';
+      });
+    }
   }
 
   // ====================================================
@@ -175,22 +192,24 @@ class _MainChatPageState extends State<MainChatPage> {
       _onWsMessage,
       onError: (e) {
         debugPrint('WS error: $e');
-        if (_sessionActive) _setError('Erro de ligação: $e');
+        _wsConnected = false;
+        _sessionReady = false;
+        if (_sessionActive) {
+          _attemptReconnect();
+        }
       },
       onDone: () {
         debugPrint('WS closed');
         _wsConnected = false;
+        _sessionReady = false;
         if (_sessionActive) {
-          setState(() {
-            _voiceState = VoiceState.error;
-            _errorMessage = 'Ligação perdida.';
-          });
+          _attemptReconnect();
         }
       },
     );
 
-    // Wait briefly for the connection
-    await Future.delayed(const Duration(milliseconds: 800));
+    // Wait for connection to establish
+    await Future.delayed(const Duration(milliseconds: 1000));
     _wsConnected = true;
 
     // Send session configuration
@@ -199,7 +218,7 @@ class _MainChatPageState extends State<MainChatPage> {
       'session': {
         'modalities': ['text', 'audio'],
         'instructions': _buildSystemPrompt(),
-        'voice': 'nova',
+        'voice': 'coral',
         'input_audio_format': 'pcm16',
         'output_audio_format': 'pcm16',
         'input_audio_transcription': {
@@ -214,10 +233,52 @@ class _MainChatPageState extends State<MainChatPage> {
         'max_response_output_tokens': 500,
       },
     });
+
+    // Wait for session to be ready
+    await Future.delayed(const Duration(milliseconds: 500));
+  }
+
+  Future<void> _attemptReconnect() async {
+    if (_reconnectAttempts >= _maxReconnectAttempts) {
+      _setError('Não foi possível manter a ligação. Toque no círculo para tentar novamente.');
+      return;
+    }
+
+    _reconnectAttempts++;
+    debugPrint('Reconnect attempt $_reconnectAttempts');
+
+    if (mounted) {
+      setState(() {
+        _voiceState = VoiceState.connecting;
+        _assistantMessage = 'A religar... (tentativa $_reconnectAttempts)';
+      });
+    }
+
+    await Future.delayed(Duration(seconds: _reconnectAttempts));
+
+    try {
+      await _disconnectWs();
+      await _stopRecording();
+      await Future.delayed(const Duration(milliseconds: 500));
+      await _connectWs();
+      await _startRecording();
+
+      if (mounted) {
+        setState(() {
+          _voiceState = VoiceState.listening;
+          _assistantMessage = 'Estou a ouvir... fale comigo!';
+          _errorMessage = '';
+        });
+      }
+    } catch (e) {
+      debugPrint('Reconnect failed: $e');
+      _attemptReconnect();
+    }
   }
 
   Future<void> _disconnectWs() async {
     _wsConnected = false;
+    _sessionReady = false;
     try {
       await _channel?.sink.close();
     } catch (_) {}
@@ -248,8 +309,14 @@ class _MainChatPageState extends State<MainChatPage> {
       switch (type) {
         // Session established
         case 'session.created':
+          debugPrint('Session created');
+          _reconnectAttempts = 0;
+          break;
+
         case 'session.updated':
           debugPrint('Session ready');
+          _sessionReady = true;
+          _reconnectAttempts = 0;
           break;
 
         // User speech detected
@@ -257,6 +324,7 @@ class _MainChatPageState extends State<MainChatPage> {
           setState(() {
             _voiceState = VoiceState.listening;
             _userMessage = 'A ouvir...';
+            _errorMessage = '';
           });
           break;
 
@@ -324,7 +392,12 @@ class _MainChatPageState extends State<MainChatPage> {
         case 'error':
           final errMsg = (data['error'] as Map?)?['message'] ?? 'Erro desconhecido';
           debugPrint('OpenAI error: $errMsg');
-          _setError('OpenAI: $errMsg');
+          // Don't show connection errors if we can reconnect
+          if (_reconnectAttempts < _maxReconnectAttempts && _sessionActive) {
+            _attemptReconnect();
+          } else {
+            _setError('Erro: $errMsg');
+          }
           break;
       }
     } catch (e) {
@@ -376,7 +449,7 @@ class _MainChatPageState extends State<MainChatPage> {
 
   Future<void> _playResponseAudio() async {
     if (_responseAudioBytes.isEmpty) {
-      if (_sessionActive) {
+      if (_sessionActive && mounted) {
         setState(() => _voiceState = VoiceState.listening);
       }
       return;
@@ -402,7 +475,9 @@ class _MainChatPageState extends State<MainChatPage> {
       );
 
       // Clean up temp file
-      try { await file.delete(); } catch (_) {}
+      try {
+        await file.delete();
+      } catch (_) {}
 
       // Return to listening if session still active
       if (_sessionActive && mounted) {
@@ -424,23 +499,38 @@ class _MainChatPageState extends State<MainChatPage> {
 
   String _buildSystemPrompt() {
     return '''
-Tu és a AMAVEL, uma assistente de voz amigável e carinhosa para idosos portugueses.
+Tu és a AMAVEL, uma assistente de voz para idosos portugueses.
 
-Regras importantes:
-- Fala SEMPRE em Português de Portugal (pt-PT).
-- Usa linguagem simples, clara e calorosa.
-- Trata o utilizador por "tu" de forma respeitosa.
-- Sê paciente e repete se necessário.
-- As tuas respostas devem ser curtas (2-3 frases no máximo).
-- Se o utilizador parecer triste ou angustiado, mostra empatia e pergunta como podes ajudar.
+REGRA ABSOLUTA DE LÍNGUA:
+- Fala EXCLUSIVAMENTE em Português Europeu (pt-PT).
+- NUNCA fales em Espanhol, Português do Brasil, Inglês, Árabe, Francês ou qualquer outra língua.
+- Mesmo que o utilizador fale noutra língua, responde SEMPRE em Português Europeu.
+- Usa vocabulário de Portugal: "telemóvel" (não "celular"), "autocarro" (não "ônibus"), "pequeno-almoço" (não "café da manhã"), "casa de banho" (não "banheiro").
+
+REGRA DE TRATAMENTO FORMAL:
+- Trata SEMPRE o utilizador por "você" (formal).
+- NUNCA uses "tu". Os utilizadores são pessoas mais velhas que merecem tratamento respeitoso.
+- Exemplos corretos: "Como está?", "O que gostaria de saber?", "Pode repetir, por favor?"
+- Exemplos ERRADOS que NUNCA deves usar: "Como estás?", "O que gostavas?", "Podes repetir?"
+
+PERSONALIDADE:
+- Sê amigável, calorosa e paciente.
+- As respostas devem ser curtas (2-3 frases no máximo).
+- Se o utilizador parecer triste ou angustiado, mostra empatia e pergunta como pode ajudar.
 - Nunca dês conselhos médicos concretos, sugere sempre falar com um médico.
-- Lembra-te de factos que o utilizador partilhe (nome, família, gostos).
 - Sê alegre e positiva, mas nunca condescendente.
 
-Exemplos de resposta:
-- "Que bom falar contigo! Como estás hoje?"
-- "Isso é muito interessante! Conta-me mais sobre isso."
-- "Compreendo que te sintas assim. Estou aqui para ti."
+CONHECIMENTO E ATUALIDADE:
+- Podes responder a perguntas de cultura geral, história, ciência e outros temas.
+- Se o utilizador perguntar sobre notícias ou eventos muito recentes que não conheces, diz honestamente: "Peço desculpa, não tenho informação atualizada sobre isso. Posso ajudar com outra coisa?"
+- Nunca inventes informação. Se não sabes, admite com simpatia.
+
+Exemplos de resposta CORRETA:
+- "Que bom falar consigo! Como está hoje?"
+- "Isso é muito interessante! Conte-me mais sobre isso."
+- "Compreendo que se sinta assim. Estou aqui para si."
+- "Gostaria de falar sobre outra coisa?"
+- "Peço desculpa, não tenho essa informação. Posso ajudar com algo diferente?"
 ''';
   }
 
