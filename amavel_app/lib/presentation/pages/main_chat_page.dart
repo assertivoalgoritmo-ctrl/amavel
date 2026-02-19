@@ -8,19 +8,30 @@ import 'package:flutter_sound/flutter_sound.dart';
 import 'package:just_audio/just_audio.dart' as ja;
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:web_socket_channel/io.dart';
 
 import 'package:amavel_app/config/api_keys.dart';
 import 'package:amavel_app/config/theme.dart';
+import 'package:amavel_app/core/constants.dart';
 import 'package:amavel_app/core/utils/audio_utils.dart';
 import 'package:amavel_app/domain/enums/voice_state.dart';
+import 'package:amavel_app/domain/models/memory_fact.dart';
+import 'package:amavel_app/domain/models/user_profile.dart';
+import 'package:amavel_app/data/repositories/alert_repository.dart';
+import 'package:amavel_app/data/repositories/memory_repository.dart';
+import 'package:amavel_app/services/memory/memory_manager.dart';
+import 'package:amavel_app/services/memory/system_prompt_builder.dart';
+import 'package:amavel_app/services/safety/alert_dispatcher.dart';
+import 'package:amavel_app/services/safety/distress_detector.dart';
+import 'package:amavel_app/services/safety/guardrails_service.dart';
 import 'package:amavel_app/presentation/widgets/animated_orb.dart';
 import 'package:amavel_app/presentation/widgets/status_indicator.dart';
 import 'package:amavel_app/presentation/widgets/transcript_bubble.dart';
 import 'package:amavel_app/presentation/widgets/elder_nav_bar.dart';
 
 /// Main chat page with full OpenAI Realtime voice pipeline.
-/// Self-contained: handles recording, WebSocket, and playback directly.
+/// Integrates: voice conversation, memory system, distress detection, alerts.
 class MainChatPage extends StatefulWidget {
   const MainChatPage({Key? key}) : super(key: key);
 
@@ -38,11 +49,8 @@ class _MainChatPageState extends State<MainChatPage> {
   // --- OpenAI WebSocket ---
   IOWebSocketChannel? _channel;
   bool _wsConnected = false;
-  bool _sessionReady = false;
   String _partialTranscript = '';
   List<int> _responseAudioBytes = [];
-  int _reconnectAttempts = 0;
-  static const int _maxReconnectAttempts = 3;
 
   // --- Audio recording (flutter_sound) ---
   final FlutterSoundRecorder _recorder = FlutterSoundRecorder();
@@ -55,6 +63,26 @@ class _MainChatPageState extends State<MainChatPage> {
   // --- Session active flag ---
   bool _sessionActive = false;
 
+  // --- User context (loaded from SharedPreferences) ---
+  String? _userId;
+  String? _userName;
+  DateTime? _userBirthdate;
+
+  // --- Memory system ---
+  late final MemoryRepository _memoryRepository;
+  late final MemoryManager _memoryManager;
+  List<MemoryFact> _memoryFacts = [];
+
+  // --- Safety systems ---
+  final GuardrailsService _guardrails = GuardrailsService();
+  late final AlertRepository _alertRepository;
+  late final AlertDispatcher _alertDispatcher;
+
+  // --- Function call tracking ---
+  String _currentFunctionCallId = '';
+  String _currentFunctionName = '';
+  String _currentFunctionArgs = '';
+
   // ====================================================
   // Lifecycle
   // ====================================================
@@ -62,7 +90,12 @@ class _MainChatPageState extends State<MainChatPage> {
   @override
   void initState() {
     super.initState();
+    _memoryRepository = MemoryRepository();
+    _memoryManager = MemoryManager(_memoryRepository);
+    _alertRepository = AlertRepository();
+    _alertDispatcher = AlertDispatcher(_alertRepository);
     _initRecorder();
+    _loadUserContext();
   }
 
   @override
@@ -73,7 +106,6 @@ class _MainChatPageState extends State<MainChatPage> {
 
   Future<void> _cleanup() async {
     try {
-      _sessionActive = false;
       await _stopRecording();
       await _disconnectWs();
       if (_recorderReady) {
@@ -92,17 +124,45 @@ class _MainChatPageState extends State<MainChatPage> {
     }
   }
 
+  /// Load user context from SharedPreferences and memory facts from Firestore
+  Future<void> _loadUserContext() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      _userId = prefs.getString(AppConstants.prefUserId);
+      _userName = prefs.getString(AppConstants.prefUserName);
+
+      final birthdateStr = prefs.getString(AppConstants.prefUserBirthdate);
+      if (birthdateStr != null) {
+        _userBirthdate = DateTime.tryParse(birthdateStr);
+      }
+
+      // Update greeting with user name
+      if (_userName != null && _userName!.isNotEmpty && mounted) {
+        setState(() {
+          _assistantMessage = 'Olá, $_userName! Toque no círculo para falar comigo.';
+        });
+      }
+    } catch (e) {
+      debugPrint('Error loading user context: $e');
+    }
+
+    // Load memory facts (Firestore, may fail if not authenticated)
+    try {
+      _memoryFacts = await _memoryRepository.getFactsForUser();
+      debugPrint('Loaded ${_memoryFacts.length} memory facts');
+    } catch (e) {
+      debugPrint('Error loading memory facts (may not be authenticated): $e');
+      _memoryFacts = [];
+    }
+  }
+
   // ====================================================
   // Tap handler — start / stop voice session
   // ====================================================
 
   Future<void> _onOrbTap() async {
     if (_voiceState == VoiceState.error) {
-      // Tap on error state resets and retries
-      _reconnectAttempts = 0;
-      _errorMessage = '';
-      await _endSession();
-      await Future.delayed(const Duration(milliseconds: 300));
+      // Retry on error
       await _startSession();
       return;
     }
@@ -158,16 +218,15 @@ class _MainChatPageState extends State<MainChatPage> {
 
   Future<void> _endSession() async {
     _sessionActive = false;
-    _sessionReady = false;
     await _stopRecording();
     await _disconnectWs();
-    if (mounted) {
-      setState(() {
-        _voiceState = VoiceState.idle;
-        _assistantMessage = 'Toque no círculo para falar comigo.';
-        _userMessage = '';
-      });
-    }
+    setState(() {
+      _voiceState = VoiceState.idle;
+      _assistantMessage = _userName != null && _userName!.isNotEmpty
+          ? 'Até já, $_userName! Toque no círculo para falar comigo.'
+          : 'Toque no círculo para falar comigo.';
+      _userMessage = '';
+    });
   }
 
   // ====================================================
@@ -192,32 +251,36 @@ class _MainChatPageState extends State<MainChatPage> {
       _onWsMessage,
       onError: (e) {
         debugPrint('WS error: $e');
-        _wsConnected = false;
-        _sessionReady = false;
-        if (_sessionActive) {
-          _attemptReconnect();
-        }
+        if (_sessionActive) _setError('Erro de ligação: $e');
       },
       onDone: () {
         debugPrint('WS closed');
         _wsConnected = false;
-        _sessionReady = false;
         if (_sessionActive) {
-          _attemptReconnect();
+          setState(() {
+            _voiceState = VoiceState.error;
+            _errorMessage = 'Ligação perdida.';
+          });
         }
       },
     );
 
-    // Wait for connection to establish
-    await Future.delayed(const Duration(milliseconds: 1000));
+    // Wait briefly for the connection
+    await Future.delayed(const Duration(milliseconds: 800));
     _wsConnected = true;
+
+    // Build dynamic system prompt
+    final systemPrompt = _buildSystemPrompt();
+
+    // Build tools list from memory manager
+    final memoryTools = _memoryManager.getMemoryTools();
 
     // Send session configuration
     _wsSend({
       'type': 'session.update',
       'session': {
         'modalities': ['text', 'audio'],
-        'instructions': _buildSystemPrompt(),
+        'instructions': systemPrompt,
         'voice': 'coral',
         'input_audio_format': 'pcm16',
         'output_audio_format': 'pcm16',
@@ -230,55 +293,15 @@ class _MainChatPageState extends State<MainChatPage> {
           'prefix_padding_ms': 300,
           'silence_duration_ms': 1200,
         },
+        'tools': memoryTools,
+        'tool_choice': 'auto',
         'max_response_output_tokens': 500,
       },
     });
-
-    // Wait for session to be ready
-    await Future.delayed(const Duration(milliseconds: 500));
-  }
-
-  Future<void> _attemptReconnect() async {
-    if (_reconnectAttempts >= _maxReconnectAttempts) {
-      _setError('Não foi possível manter a ligação. Toque no círculo para tentar novamente.');
-      return;
-    }
-
-    _reconnectAttempts++;
-    debugPrint('Reconnect attempt $_reconnectAttempts');
-
-    if (mounted) {
-      setState(() {
-        _voiceState = VoiceState.connecting;
-        _assistantMessage = 'A religar... (tentativa $_reconnectAttempts)';
-      });
-    }
-
-    await Future.delayed(Duration(seconds: _reconnectAttempts));
-
-    try {
-      await _disconnectWs();
-      await _stopRecording();
-      await Future.delayed(const Duration(milliseconds: 500));
-      await _connectWs();
-      await _startRecording();
-
-      if (mounted) {
-        setState(() {
-          _voiceState = VoiceState.listening;
-          _assistantMessage = 'Estou a ouvir... fale comigo!';
-          _errorMessage = '';
-        });
-      }
-    } catch (e) {
-      debugPrint('Reconnect failed: $e');
-      _attemptReconnect();
-    }
   }
 
   Future<void> _disconnectWs() async {
     _wsConnected = false;
-    _sessionReady = false;
     try {
       await _channel?.sink.close();
     } catch (_) {}
@@ -309,14 +332,8 @@ class _MainChatPageState extends State<MainChatPage> {
       switch (type) {
         // Session established
         case 'session.created':
-          debugPrint('Session created');
-          _reconnectAttempts = 0;
-          break;
-
         case 'session.updated':
           debugPrint('Session ready');
-          _sessionReady = true;
-          _reconnectAttempts = 0;
           break;
 
         // User speech detected
@@ -324,7 +341,6 @@ class _MainChatPageState extends State<MainChatPage> {
           setState(() {
             _voiceState = VoiceState.listening;
             _userMessage = 'A ouvir...';
-            _errorMessage = '';
           });
           break;
 
@@ -337,13 +353,15 @@ class _MainChatPageState extends State<MainChatPage> {
           });
           break;
 
-        // User transcript
+        // User transcript completed
         case 'conversation.item.input_audio_transcription.completed':
           final transcript = data['transcript'] as String? ?? '';
           if (transcript.isNotEmpty) {
             setState(() {
               _userMessage = transcript;
             });
+            // Run distress detection asynchronously
+            _analyzeUserTranscript(transcript);
           }
           break;
 
@@ -383,25 +401,160 @@ class _MainChatPageState extends State<MainChatPage> {
           _playResponseAudio();
           break;
 
+        // Function call arguments accumulating
+        case 'response.function_call_arguments.delta':
+          final delta = data['delta'] as String? ?? '';
+          _currentFunctionArgs += delta;
+          break;
+
+        // Function call complete — handle it
+        case 'response.function_call_arguments.done':
+          _currentFunctionCallId = data['call_id'] as String? ?? '';
+          _currentFunctionName = data['name'] as String? ?? '';
+          _currentFunctionArgs = data['arguments'] as String? ?? _currentFunctionArgs;
+          debugPrint('Function call: $_currentFunctionName($_currentFunctionArgs)');
+          _handleFunctionCall();
+          break;
+
         // Full response complete
         case 'response.done':
           debugPrint('Response done');
+          // Check if there was a function call in this response
+          final response = data['response'] as Map<String, dynamic>?;
+          if (response != null) {
+            final output = response['output'] as List<dynamic>?;
+            if (output != null) {
+              for (final item in output) {
+                if (item is Map<String, dynamic> && item['type'] == 'function_call') {
+                  // Function call was part of this response, already handled
+                  debugPrint('Response contained function call');
+                }
+              }
+            }
+          }
           break;
 
         // Errors from OpenAI
         case 'error':
           final errMsg = (data['error'] as Map?)?['message'] ?? 'Erro desconhecido';
           debugPrint('OpenAI error: $errMsg');
-          // Don't show connection errors if we can reconnect
-          if (_reconnectAttempts < _maxReconnectAttempts && _sessionActive) {
-            _attemptReconnect();
-          } else {
-            _setError('Erro: $errMsg');
-          }
+          _setError('OpenAI: $errMsg');
           break;
       }
     } catch (e) {
       debugPrint('WS message parse error: $e');
+    }
+  }
+
+  // ====================================================
+  // Distress detection (runs on user transcripts)
+  // ====================================================
+
+  Future<void> _analyzeUserTranscript(String transcript) async {
+    try {
+      final result = _guardrails.analyzeTranscript(transcript);
+
+      if (!result.isSafe) {
+        debugPrint('Safety alert: ${result.severity} — ${result.detectedPatterns}');
+
+        // Dispatch alert for critical and high severity
+        if (result.severity == 'critical' || result.severity == 'high') {
+          final userId = _userId ?? 'anonymous';
+          final distress = _guardrails.analyzeTranscript(transcript);
+
+          // Use the distress detector directly for the AlertDispatcher
+          final detector = _guardrails;
+          await _alertDispatcher.dispatchDistressAlert(
+            userId,
+            // We need to get the DetectedDistress object
+            _getDetectedDistress(transcript),
+            transcript,
+          );
+          debugPrint('Alert dispatched for severity: ${result.severity}');
+        }
+      }
+    } catch (e) {
+      debugPrint('Error in distress analysis: $e');
+      // Don't let analysis errors affect the conversation
+    }
+  }
+
+  /// Helper to get DetectedDistress from transcript for the AlertDispatcher
+  DetectedDistress _getDetectedDistress(String transcript) {
+    // Access the detector through GuardrailsService
+    // Since GuardrailsService internally uses DistressDetector,
+    // we create our own instance for the AlertDispatcher
+    final detector = DistressDetector();
+    return detector.detectDistress(transcript);
+  }
+
+  // ====================================================
+  // Memory function call handling
+  // ====================================================
+
+  Future<void> _handleFunctionCall() async {
+    if (_currentFunctionName.isEmpty) return;
+
+    try {
+      debugPrint('Handling function call: $_currentFunctionName');
+
+      // Route to memory manager
+      final result = await _memoryManager.handleFunctionCall(
+        _currentFunctionName,
+        _currentFunctionArgs,
+      );
+
+      debugPrint('Function result: $result');
+
+      // Send function result back to OpenAI
+      _wsSend({
+        'type': 'conversation.item.create',
+        'item': {
+          'type': 'function_call_output',
+          'call_id': _currentFunctionCallId,
+          'output': jsonEncode(result),
+        },
+      });
+
+      // Trigger response generation after function call
+      _wsSend({
+        'type': 'response.create',
+      });
+
+      // Reload memory facts if a new fact was stored
+      if (_currentFunctionName == 'store_memory_fact' &&
+          result['success'] == true) {
+        try {
+          _memoryFacts = await _memoryRepository.getFactsForUser();
+          debugPrint('Reloaded ${_memoryFacts.length} memory facts');
+        } catch (e) {
+          debugPrint('Error reloading memory facts: $e');
+        }
+      }
+    } catch (e) {
+      debugPrint('Error handling function call: $e');
+
+      // Send error result back
+      _wsSend({
+        'type': 'conversation.item.create',
+        'item': {
+          'type': 'function_call_output',
+          'call_id': _currentFunctionCallId,
+          'output': jsonEncode({
+            'success': false,
+            'error': 'Erro interno: $e',
+          }),
+        },
+      });
+
+      _wsSend({
+        'type': 'response.create',
+      });
+    } finally {
+      // Reset function call state
+      _currentFunctionCallId = '';
+      _currentFunctionName = '';
+      _currentFunctionArgs = '';
     }
   }
 
@@ -415,9 +568,9 @@ class _MainChatPageState extends State<MainChatPage> {
     _recorderStreamCtrl = StreamController<Uint8List>();
 
     // Listen for audio data and send to OpenAI
-    _recorderStreamCtrl!.stream.listen((audioData) {
-      if (audioData.isNotEmpty && _wsConnected) {
-        final b64 = base64Encode(audioData);
+    _recorderStreamCtrl!.stream.listen((data) {
+      if (_wsConnected) {
+        final b64 = base64Encode(data);
         _wsSend({
           'type': 'input_audio_buffer.append',
           'audio': b64,
@@ -449,7 +602,8 @@ class _MainChatPageState extends State<MainChatPage> {
 
   Future<void> _playResponseAudio() async {
     if (_responseAudioBytes.isEmpty) {
-      if (_sessionActive && mounted) {
+      // No audio — just go back to listening
+      if (_sessionActive) {
         setState(() => _voiceState = VoiceState.listening);
       }
       return;
@@ -475,9 +629,7 @@ class _MainChatPageState extends State<MainChatPage> {
       );
 
       // Clean up temp file
-      try {
-        await file.delete();
-      } catch (_) {}
+      try { await file.delete(); } catch (_) {}
 
       // Return to listening if session still active
       if (_sessionActive && mounted) {
@@ -494,44 +646,57 @@ class _MainChatPageState extends State<MainChatPage> {
   }
 
   // ====================================================
-  // System prompt
+  // System prompt (dynamic, with user context + memory + guardrails)
   // ====================================================
 
   String _buildSystemPrompt() {
-    return '''
-Tu és a AMAVEL, uma assistente de voz para idosos portugueses.
+    // Build UserProfile from loaded context
+    UserProfile? userProfile;
+    if (_userName != null && _userName!.isNotEmpty) {
+      userProfile = UserProfile(
+        id: _userId ?? 'anonymous',
+        displayName: _userName,
+        dateOfBirth: _userBirthdate,
+        language: 'pt-PT',
+        voicePreferences: VoicePreferences(),
+        assistantName: 'AMAVEL',
+        createdAt: DateTime.now(),
+        lastActiveAt: DateTime.now(),
+      );
+    }
 
-REGRA ABSOLUTA DE LÍNGUA:
-- Fala EXCLUSIVAMENTE em Português Europeu (pt-PT).
-- NUNCA fales em Espanhol, Português do Brasil, Inglês, Árabe, Francês ou qualquer outra língua.
-- Mesmo que o utilizador fale noutra língua, responde SEMPRE em Português Europeu.
-- Usa vocabulário de Portugal: "telemóvel" (não "celular"), "autocarro" (não "ônibus"), "pequeno-almoço" (não "café da manhã"), "casa de banho" (não "banheiro").
+    // Use SystemPromptBuilder for the base + user context + memory facts
+    final basePrompt = SystemPromptBuilder.buildPrompt(
+      user: userProfile,
+      facts: _memoryFacts.isNotEmpty ? _memoryFacts : null,
+    );
 
-REGRA DE TRATAMENTO FORMAL:
-- Trata SEMPRE o utilizador por "você" (formal).
-- NUNCA uses "tu". Os utilizadores são pessoas mais velhas que merecem tratamento respeitoso.
-- Exemplos corretos: "Como está?", "O que gostaria de saber?", "Pode repetir, por favor?"
-- Exemplos ERRADOS que NUNCA deves usar: "Como estás?", "O que gostavas?", "Podes repetir?"
+    // Append guardrails section
+    final guardrailsSection = _guardrails.getGuardrailSystemPromptSection();
 
-PERSONALIDADE:
-- Sê amigável, calorosa e paciente.
-- As respostas devem ser curtas (2-3 frases no máximo).
-- Se o utilizador parecer triste ou angustiado, mostra empatia e pergunta como pode ajudar.
-- Nunca dês conselhos médicos concretos, sugere sempre falar com um médico.
-- Sê alegre e positiva, mas nunca condescendente.
+    // Append critical language and behavior rules
+    final languageRules = '''
 
-CONHECIMENTO E ATUALIDADE:
-- Podes responder a perguntas de cultura geral, história, ciência e outros temas.
-- Se o utilizador perguntar sobre notícias ou eventos muito recentes que não conheces, diz honestamente: "Peço desculpa, não tenho informação atualizada sobre isso. Posso ajudar com outra coisa?"
-- Nunca inventes informação. Se não sabes, admite com simpatia.
+--- REGRA ABSOLUTA DE LÍNGUA ---
+FALA EXCLUSIVAMENTE EM PORTUGUÊS EUROPEU (pt-PT).
+NUNCA fales em português do Brasil, espanhol, inglês, ou qualquer outra língua.
+Se o utilizador falar noutra língua, responde SEMPRE em português europeu.
+Usa vocabulário e expressões de Portugal (ex: "telemóvel" e não "celular", "autocarro" e não "ônibus").
 
-Exemplos de resposta CORRETA:
-- "Que bom falar consigo! Como está hoje?"
-- "Isso é muito interessante! Conte-me mais sobre isso."
-- "Compreendo que se sinta assim. Estou aqui para si."
-- "Gostaria de falar sobre outra coisa?"
-- "Peço desculpa, não tenho essa informação. Posso ajudar com algo diferente?"
+--- REGRAS DE COMUNICAÇÃO ---
+- Trata SEMPRE o utilizador por "você" (formal e respeitoso).
+- Respostas curtas: 2-3 frases no máximo, exceto se o utilizador pedir mais.
+- Fala de forma clara, simples e calorosa.
+- Nunca sejas condescendente.
+- Se não souberes algo sobre atualidade ou notícias, diz honestamente que não tens essa informação atualizada.
+
+--- MEMÓRIA ---
+- Quando o utilizador partilhar informação pessoal (nomes de família, aniversários, preferências, gostos), usa a função store_memory_fact para guardar.
+- No início de cada conversa, usa os factos conhecidos sobre o utilizador de forma natural.
+- Apenas guarda factos com confiança >= 0.7.
 ''';
+
+    return basePrompt + guardrailsSection + languageRules;
   }
 
   // ====================================================
