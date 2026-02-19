@@ -4,7 +4,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
-import 'package:flutter_sound/flutter_sound.dart';
+import 'package:flutter_sound/public/flutter_sound_recorder.dart';
 import 'package:just_audio/just_audio.dart' as ja;
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -44,7 +44,7 @@ class _MainChatPageState extends State<MainChatPage> {
   // --- Audio recording (flutter_sound) ---
   final FlutterSoundRecorder _recorder = FlutterSoundRecorder();
   bool _recorderReady = false;
-  StreamController<Food>? _recorderStreamCtrl;
+  StreamController<Uint8List>? _recorderStreamCtrl;
 
   // --- Audio playback (just_audio) ---
   final ja.AudioPlayer _player = ja.AudioPlayer();
@@ -318,7 +318,6 @@ class _MainChatPageState extends State<MainChatPage> {
         // Full response complete
         case 'response.done':
           debugPrint('Response done');
-          // After audio finishes playing, state goes back to listening
           break;
 
         // Errors from OpenAI
@@ -340,12 +339,12 @@ class _MainChatPageState extends State<MainChatPage> {
   Future<void> _startRecording() async {
     if (!_recorderReady) return;
 
-    _recorderStreamCtrl = StreamController<Food>();
+    _recorderStreamCtrl = StreamController<Uint8List>();
 
     // Listen for audio data and send to OpenAI
-    _recorderStreamCtrl!.stream.listen((food) {
-      if (food is FoodData && food.data != null && _wsConnected) {
-        final b64 = base64Encode(food.data!);
+    _recorderStreamCtrl!.stream.listen((audioData) {
+      if (audioData.isNotEmpty && _wsConnected) {
+        final b64 = base64Encode(audioData);
         _wsSend({
           'type': 'input_audio_buffer.append',
           'audio': b64,
@@ -377,7 +376,6 @@ class _MainChatPageState extends State<MainChatPage> {
 
   Future<void> _playResponseAudio() async {
     if (_responseAudioBytes.isEmpty) {
-      // No audio — just go back to listening
       if (_sessionActive) {
         setState(() => _voiceState = VoiceState.listening);
       }
