@@ -24,7 +24,7 @@ class _ConsentPageState extends State<ConsentPage> {
       await prefs.setBool('consent_given', true);
 
       if (mounted) {
-        Navigator.of(context).pushNamed(AppConstants.routeVoiceSetup);
+        Navigator.of(context).pushNamed(AppConstants.routeNameBirthdate);
       }
     } catch (e) {
       if (mounted) {
@@ -32,7 +32,7 @@ class _ConsentPageState extends State<ConsentPage> {
           SnackBar(
             content: Text(
               'Erro ao guardar consentimento. Por favor, tente novamente.',
-              style: TextStyle(fontSize: AmavelTheme.textSizeBody, color: Colors.white),
+              style: const TextStyle(fontSize: 16, color: Colors.white),
             ),
             backgroundColor: Colors.red,
           ),
@@ -213,16 +213,16 @@ class _ConsentPageState extends State<ConsentPage> {
     return '''A AMAVEL recolhe e processa os seus dados para fornecer serviços personalizados de acompanhamento e suporte.
 
 Dados Recolhidos:
-• Registos de voz e transcrições
-• Histórico de conversas
-• Preferências pessoais
-• Informações de conta
+- Registos de voz e transcrições
+- Histórico de conversas
+- Preferências pessoais
+- Informações de conta
 
 Os seus dados são:
-• Processados com segurança
-• Nunca partilhados sem consentimento
-• Protegidos de acordo com GDPR
-• Utilizados apenas para melhorar a experiência
+- Processados com segurança
+- Nunca partilhados sem consentimento
+- Protegidos de acordo com GDPR
+- Utilizados apenas para melhorar a experiência
 
 Tem o direito de aceder, modificar ou eliminar os seus dados a qualquer momento.''';
   }
