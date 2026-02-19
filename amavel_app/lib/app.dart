@@ -5,6 +5,7 @@ import 'package:amavel_app/core/constants.dart';
 import 'package:amavel_app/presentation/pages/splash_page.dart';
 import 'package:amavel_app/presentation/pages/onboarding/welcome_page.dart';
 import 'package:amavel_app/presentation/pages/onboarding/consent_page.dart';
+import 'package:amavel_app/presentation/pages/onboarding/name_birthdate_page.dart';
 import 'package:amavel_app/presentation/pages/onboarding/voice_setup_page.dart';
 import 'package:amavel_app/presentation/pages/main_chat_page.dart';
 import 'package:amavel_app/presentation/pages/messages_page.dart';
@@ -24,6 +25,7 @@ class AmavelApp extends ConsumerWidget {
         AppConstants.routeSplash: (_) => const SplashPage(),
         AppConstants.routeOnboarding: (_) => const WelcomePage(),
         AppConstants.routeConsent: (_) => const ConsentPage(),
+        AppConstants.routeNameBirthdate: (_) => const NameBirthdatePage(),
         AppConstants.routeVoiceSetup: (_) => const VoiceSetupPage(),
         AppConstants.routeHome: (_) => const MainChatPage(),
         AppConstants.routeMessages: (_) => const MessagesPage(),
