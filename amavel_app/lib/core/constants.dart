@@ -28,11 +28,14 @@ class AppConstants {
   static const String prefPipelineMode = 'pipeline_mode';
   static const String prefVoiceSpeed = 'voice_speed';
   static const String prefVoiceVolume = 'voice_volume';
+  static const String prefUserName = 'user_name';
+  static const String prefUserBirthdate = 'user_birthdate';
 
   // Navigation routes
   static const String routeSplash = '/';
   static const String routeOnboarding = '/onboarding';
   static const String routeConsent = '/consent';
+  static const String routeNameBirthdate = '/name-birthdate';
   static const String routeVoiceSetup = '/voice-setup';
   static const String routeHome = '/home';
   static const String routeMessages = '/messages';
