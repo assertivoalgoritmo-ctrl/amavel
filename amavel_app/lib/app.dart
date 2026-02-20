@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:amavel_app/config/theme.dart';
 import 'package:amavel_app/core/constants.dart';
 import 'package:amavel_app/presentation/pages/splash_page.dart';
@@ -20,6 +21,17 @@ class AmavelApp extends ConsumerWidget {
       title: AppConstants.appName,
       theme: AmavelTheme.lightTheme,
       debugShowCheckedModeBanner: false,
+      // Portuguese localization for date picker and other widgets
+      localizationsDelegates: const [
+        GlobalMaterialLocalizations.delegate,
+        GlobalWidgetsLocalizations.delegate,
+        GlobalCupertinoLocalizations.delegate,
+      ],
+      supportedLocales: const [
+        Locale('pt', 'PT'),
+        Locale('pt'),
+      ],
+      locale: const Locale('pt', 'PT'),
       initialRoute: AppConstants.routeSplash,
       routes: {
         AppConstants.routeSplash: (_) => const SplashPage(),
