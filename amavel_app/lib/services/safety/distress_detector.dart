@@ -1,4 +1,4 @@
-import 'package:diacritic/diacritic.dart';
+// Manual diacritic removal (no external dependency needed)
 
 /// Result of distress detection analysis
 class DetectedDistress {
@@ -183,9 +183,18 @@ class DistressDetector {
 
   /// Normalizes text for matching (lowercase, removes accents)
   String _normalizeText(String text) {
-    // Remove accents using diacritic package
-    final noAccents = removeDiacritics(text);
-    return noAccents.toLowerCase();
+    return _removeDiacritics(text.toLowerCase());
+  }
+
+  /// Removes common Portuguese diacritics without external dependency
+  static String _removeDiacritics(String text) {
+    const diacritics = 'àáâãäåèéêëìíîïòóôõöùúûüýñçÀÁÂÃÄÅÈÉÊËÌÍÎÏÒÓÔÕÖÙÚÛÜÝÑÇ';
+    const replacements = 'aaaaaaeeeeiiiiooooouuuuynçAAAAAAEEEEIIIIOOOOOUUUUYNC';
+    var result = text;
+    for (int i = 0; i < diacritics.length; i++) {
+      result = result.replaceAll(diacritics[i], replacements[i]);
+    }
+    return result;
   }
 
   /// Checks if any keywords match in text with fuzzy matching
