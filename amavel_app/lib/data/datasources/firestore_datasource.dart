@@ -220,13 +220,13 @@ class FirestoreDataSource {
       final familyMembers = await familyMembersRef.count().get();
 
       return {
-        'userProfiles': userProfiles.count,
-        'memoryFacts': memoryFacts.count,
-        'conversations': conversations.count,
-        'conversationTurns': turns.count,
-        'messages': messages.count,
-        'alerts': alerts.count,
-        'familyMembers': familyMembers.count,
+        'userProfiles': userProfiles.count ?? 0,
+        'memoryFacts': memoryFacts.count ?? 0,
+        'conversations': conversations.count ?? 0,
+        'conversationTurns': turns.count ?? 0,
+        'messages': messages.count ?? 0,
+        'alerts': alerts.count ?? 0,
+        'familyMembers': familyMembers.count ?? 0,
       };
     } catch (e) {
       print('Erro ao recuperar estatísticas do banco de dados: $e');
