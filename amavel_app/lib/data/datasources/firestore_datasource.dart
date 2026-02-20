@@ -6,60 +6,50 @@ class FirestoreDataSource {
   static final FirestoreDataSource _instance =
       FirestoreDataSource._internal();
 
-  late final FirebaseFirestore _firestore;
-  late final FirebaseAuth _auth;
+  FirebaseFirestore? _firestore;
+  FirebaseAuth? _auth;
 
   factory FirestoreDataSource({
     FirebaseFirestore? firestore,
     FirebaseAuth? auth,
   }) {
-    if (firestore != null) {
-      _instance._firestore = firestore;
-    } else {
-      _instance._firestore ??= FirebaseFirestore.instance;
-    }
-
-    if (auth != null) {
-      _instance._auth = auth;
-    } else {
-      _instance._auth ??= FirebaseAuth.instance;
-    }
-
+    _instance._firestore = firestore ?? _instance._firestore ?? FirebaseFirestore.instance;
+    _instance._auth = auth ?? _instance._auth ?? FirebaseAuth.instance;
     return _instance;
   }
 
   FirestoreDataSource._internal();
 
   /// Get current user ID
-  String? get currentUserId => _auth.currentUser?.uid;
+  String? get currentUserId => _auth?.currentUser?.uid;
 
   /// User profiles collection reference
   CollectionReference<Map<String, dynamic>> get userProfileRef =>
-      _firestore.collection('user_profiles');
+      _firestore!.collection('user_profiles');
 
   /// Memory facts collection reference
   CollectionReference<Map<String, dynamic>> get memoryFactsRef =>
-      _firestore.collection('memory_facts');
+      _firestore!.collection('memory_facts');
 
   /// Conversations collection reference
   CollectionReference<Map<String, dynamic>> get conversationsRef =>
-      _firestore.collection('conversations');
+      _firestore!.collection('conversations');
 
   /// Conversation turns collection reference
   CollectionReference<Map<String, dynamic>> get conversationTurnsRef =>
-      _firestore.collection('conversation_turns');
+      _firestore!.collection('conversation_turns');
 
   /// Messages collection reference
   CollectionReference<Map<String, dynamic>> get messagesRef =>
-      _firestore.collection('messages');
+      _firestore!.collection('messages');
 
   /// Alerts collection reference
   CollectionReference<Map<String, dynamic>> get alertsRef =>
-      _firestore.collection('alerts');
+      _firestore!.collection('alerts');
 
   /// Family members collection reference
   CollectionReference<Map<String, dynamic>> get familyMembersRef =>
-      _firestore.collection('family_members');
+      _firestore!.collection('family_members');
 
   /// Sets Firestore instance (for testing)
   void setFirestore(FirebaseFirestore firestore) {
@@ -73,20 +63,20 @@ class FirestoreDataSource {
 
   /// Common operation: batch write
   WriteBatch batch() {
-    return _firestore.batch();
+    return _firestore!.batch();
   }
 
   /// Common operation: transaction
   Future<T> runTransaction<T>(
     Future<T> Function(Transaction) transactionHandler,
   ) {
-    return _firestore.runTransaction(transactionHandler);
+    return _firestore!.runTransaction(transactionHandler);
   }
 
   /// Deletes a document from a collection
   Future<void> deleteDocument(String path) async {
     try {
-      await _firestore.doc(path).delete();
+      await _firestore!.doc(path).delete();
     } catch (e) {
       print('Erro ao eliminar documento: $e');
       rethrow;
@@ -98,7 +88,7 @@ class FirestoreDataSource {
     String path,
   ) async {
     try {
-      return await _firestore.doc(path).get();
+      return await _firestore!.doc(path).get();
     } catch (e) {
       print('Erro ao recuperar documento: $e');
       rethrow;
@@ -112,7 +102,7 @@ class FirestoreDataSource {
     bool merge = false,
   }) async {
     try {
-      await _firestore.doc(path).set(data, SetOptions(merge: merge));
+      await _firestore!.doc(path).set(data, SetOptions(merge: merge));
     } catch (e) {
       print('Erro ao definir documento: $e');
       rethrow;
@@ -125,7 +115,7 @@ class FirestoreDataSource {
     Map<String, dynamic> data,
   ) async {
     try {
-      await _firestore.doc(path).update(data);
+      await _firestore!.doc(path).update(data);
     } catch (e) {
       print('Erro ao atualizar documento: $e');
       rethrow;
@@ -135,7 +125,7 @@ class FirestoreDataSource {
   /// Checks if a document exists
   Future<bool> documentExists(String path) async {
     try {
-      final doc = await _firestore.doc(path).get();
+      final doc = await _firestore!.doc(path).get();
       return doc.exists;
     } catch (e) {
       print('Erro ao verificar existência do documento: $e');
@@ -147,7 +137,7 @@ class FirestoreDataSource {
   /// WARNING: This deletes all user data and is irreversible
   Future<void> deleteAllUserData(String userId) async {
     try {
-      final batch = _firestore.batch();
+      final batch = _firestore!.batch();
 
       // Delete user profile
       batch.delete(userProfileRef.doc(userId));
@@ -229,7 +219,7 @@ class FirestoreDataSource {
         'familyMembers': familyMembers.count ?? 0,
       };
     } catch (e) {
-      print('Erro ao recuperar estatísticas da base de dados: $e');
+      print('Erro ao recuperar estatísticas do banco de dados: $e');
       return {};
     }
   }
