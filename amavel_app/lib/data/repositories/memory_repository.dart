@@ -81,7 +81,7 @@ class MemoryRepository {
 
       final snapshot = await query.get();
       return snapshot.docs
-          .map((doc) => MemoryFact.fromJson(doc.data()))
+          .map((doc) => MemoryFact.fromJson(doc.data() as Map<String, dynamic>))
           .toList();
     } catch (e) {
       print('Erro ao recuperar factos de memória: $e');
@@ -158,7 +158,7 @@ class MemoryRepository {
           .get();
 
       return snapshot.docs
-          .map((doc) => MemoryFact.fromJson(doc.data()))
+          .map((doc) => MemoryFact.fromJson(doc.data() as Map<String, dynamic>))
           .toList();
     } catch (e) {
       print('Erro ao recuperar factos por categoria: $e');
@@ -181,7 +181,7 @@ class MemoryRepository {
 
       final lowercaseQuery = query.toLowerCase();
       return snapshot.docs
-          .map((doc) => MemoryFact.fromJson(doc.data()))
+          .map((doc) => MemoryFact.fromJson(doc.data() as Map<String, dynamic>))
           .where((fact) =>
               fact.key.toLowerCase().contains(lowercaseQuery) ||
               fact.value.toLowerCase().contains(lowercaseQuery))
@@ -208,7 +208,7 @@ class MemoryRepository {
           .get();
 
       return snapshot.docs
-          .map((doc) => MemoryFact.fromJson(doc.data()))
+          .map((doc) => MemoryFact.fromJson(doc.data() as Map<String, dynamic>))
           .toList();
     } catch (e) {
       print('Erro ao recuperar factos recentes: $e');
@@ -231,7 +231,7 @@ class MemoryRepository {
           .get();
 
       return snapshot.docs
-          .map((doc) => MemoryFact.fromJson(doc.data()))
+          .map((doc) => MemoryFact.fromJson(doc.data() as Map<String, dynamic>))
           .toList();
     } catch (e) {
       print('Erro ao recuperar factos de alta confiança: $e');
@@ -251,7 +251,7 @@ class MemoryRepository {
         .where('isActive', isEqualTo: true)
         .snapshots()
         .map((snapshot) => snapshot.docs
-            .map((doc) => MemoryFact.fromJson(doc.data()))
+            .map((doc) => MemoryFact.fromJson(doc.data() as Map<String, dynamic>))
             .toList());
   }
 }
