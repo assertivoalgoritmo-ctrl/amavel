@@ -229,7 +229,7 @@ class FirestoreDataSource {
         'familyMembers': familyMembers.count ?? 0,
       };
     } catch (e) {
-      print('Erro ao recuperar estatísticas do banco de dados: $e');
+      print('Erro ao recuperar estatísticas da base de dados: $e');
       return {};
     }
   }
