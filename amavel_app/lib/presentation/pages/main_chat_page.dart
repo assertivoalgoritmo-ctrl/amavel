@@ -68,15 +68,15 @@ class _MainChatPageState extends State<MainChatPage> {
   String? _userName;
   DateTime? _userBirthdate;
 
-  // --- Memory system ---
-  late final MemoryRepository _memoryRepository;
-  late final MemoryManager _memoryManager;
+  // --- Memory system (nullable — graceful degradation if Firebase fails) ---
+  MemoryRepository? _memoryRepository;
+  MemoryManager? _memoryManager;
   List<MemoryFact> _memoryFacts = [];
 
-  // --- Safety systems ---
-  final GuardrailsService _guardrails = GuardrailsService();
-  late final AlertRepository _alertRepository;
-  late final AlertDispatcher _alertDispatcher;
+  // --- Safety systems (nullable — graceful degradation if Firebase fails) ---
+  GuardrailsService? _guardrails;
+  AlertRepository? _alertRepository;
+  AlertDispatcher? _alertDispatcher;
 
   // --- Function call tracking ---
   String _currentFunctionCallId = '';
@@ -90,10 +90,22 @@ class _MainChatPageState extends State<MainChatPage> {
   @override
   void initState() {
     super.initState();
-    _memoryRepository = MemoryRepository();
-    _memoryManager = MemoryManager(_memoryRepository);
-    _alertRepository = AlertRepository();
-    _alertDispatcher = AlertDispatcher(_alertRepository);
+
+    // Initialize safety services (no Firebase dependency)
+    _guardrails = GuardrailsService();
+
+    // Initialize Firebase-dependent services safely
+    try {
+      _memoryRepository = MemoryRepository();
+      _memoryManager = MemoryManager(_memoryRepository!);
+      _alertRepository = AlertRepository();
+      _alertDispatcher = AlertDispatcher(_alertRepository!);
+      debugPrint('All services initialized successfully');
+    } catch (e) {
+      debugPrint('Error initializing Firebase services (will work without memory/alerts): $e');
+      // Voice conversation will still work without these services
+    }
+
     _initRecorder();
     _loadUserContext();
   }
@@ -147,12 +159,14 @@ class _MainChatPageState extends State<MainChatPage> {
     }
 
     // Load memory facts (Firestore, may fail if not authenticated)
-    try {
-      _memoryFacts = await _memoryRepository.getFactsForUser();
-      debugPrint('Loaded ${_memoryFacts.length} memory facts');
-    } catch (e) {
-      debugPrint('Error loading memory facts (may not be authenticated): $e');
-      _memoryFacts = [];
+    if (_memoryRepository != null) {
+      try {
+        _memoryFacts = await _memoryRepository!.getFactsForUser();
+        debugPrint('Loaded ${_memoryFacts.length} memory facts');
+      } catch (e) {
+        debugPrint('Error loading memory facts (may not be authenticated): $e');
+        _memoryFacts = [];
+      }
     }
   }
 
@@ -272,31 +286,38 @@ class _MainChatPageState extends State<MainChatPage> {
     // Build dynamic system prompt
     final systemPrompt = _buildSystemPrompt();
 
-    // Build tools list from memory manager
-    final memoryTools = _memoryManager.getMemoryTools();
+    // Build tools list from memory manager (if available)
+    final memoryTools = _memoryManager?.getMemoryTools() ?? [];
+
+    // Build session config
+    final sessionConfig = <String, dynamic>{
+      'modalities': ['text', 'audio'],
+      'instructions': systemPrompt,
+      'voice': 'coral',
+      'input_audio_format': 'pcm16',
+      'output_audio_format': 'pcm16',
+      'input_audio_transcription': {
+        'model': 'whisper-1',
+      },
+      'turn_detection': {
+        'type': 'server_vad',
+        'threshold': 0.5,
+        'prefix_padding_ms': 300,
+        'silence_duration_ms': 1200,
+      },
+      'max_response_output_tokens': 500,
+    };
+
+    // Only add tools if memory manager is available
+    if (memoryTools.isNotEmpty) {
+      sessionConfig['tools'] = memoryTools;
+      sessionConfig['tool_choice'] = 'auto';
+    }
 
     // Send session configuration
     _wsSend({
       'type': 'session.update',
-      'session': {
-        'modalities': ['text', 'audio'],
-        'instructions': systemPrompt,
-        'voice': 'coral',
-        'input_audio_format': 'pcm16',
-        'output_audio_format': 'pcm16',
-        'input_audio_transcription': {
-          'model': 'whisper-1',
-        },
-        'turn_detection': {
-          'type': 'server_vad',
-          'threshold': 0.5,
-          'prefix_padding_ms': 300,
-          'silence_duration_ms': 1200,
-        },
-        'tools': memoryTools,
-        'tool_choice': 'auto',
-        'max_response_output_tokens': 500,
-      },
+      'session': sessionConfig,
     });
   }
 
@@ -419,19 +440,6 @@ class _MainChatPageState extends State<MainChatPage> {
         // Full response complete
         case 'response.done':
           debugPrint('Response done');
-          // Check if there was a function call in this response
-          final response = data['response'] as Map<String, dynamic>?;
-          if (response != null) {
-            final output = response['output'] as List<dynamic>?;
-            if (output != null) {
-              for (final item in output) {
-                if (item is Map<String, dynamic> && item['type'] == 'function_call') {
-                  // Function call was part of this response, already handled
-                  debugPrint('Response contained function call');
-                }
-              }
-            }
-          }
           break;
 
         // Errors from OpenAI
@@ -451,23 +459,26 @@ class _MainChatPageState extends State<MainChatPage> {
   // ====================================================
 
   Future<void> _analyzeUserTranscript(String transcript) async {
+    if (_guardrails == null) return;
+
     try {
-      final result = _guardrails.analyzeTranscript(transcript);
+      final result = _guardrails!.analyzeTranscript(transcript);
 
       if (!result.isSafe) {
         debugPrint('Safety alert: ${result.severity} — ${result.detectedPatterns}');
 
         // Dispatch alert for critical and high severity
-        if (result.severity == 'critical' || result.severity == 'high') {
+        if ((result.severity == 'critical' || result.severity == 'high') &&
+            _alertDispatcher != null) {
           final userId = _userId ?? 'anonymous';
-          final distress = _guardrails.analyzeTranscript(transcript);
 
           // Use the distress detector directly for the AlertDispatcher
-          final detector = _guardrails;
-          await _alertDispatcher.dispatchDistressAlert(
+          final detector = DistressDetector();
+          final distress = detector.detectDistress(transcript);
+
+          await _alertDispatcher!.dispatchDistressAlert(
             userId,
-            // We need to get the DetectedDistress object
-            _getDetectedDistress(transcript),
+            distress,
             transcript,
           );
           debugPrint('Alert dispatched for severity: ${result.severity}');
@@ -479,27 +490,38 @@ class _MainChatPageState extends State<MainChatPage> {
     }
   }
 
-  /// Helper to get DetectedDistress from transcript for the AlertDispatcher
-  DetectedDistress _getDetectedDistress(String transcript) {
-    // Access the detector through GuardrailsService
-    // Since GuardrailsService internally uses DistressDetector,
-    // we create our own instance for the AlertDispatcher
-    final detector = DistressDetector();
-    return detector.detectDistress(transcript);
-  }
-
   // ====================================================
   // Memory function call handling
   // ====================================================
 
   Future<void> _handleFunctionCall() async {
-    if (_currentFunctionName.isEmpty) return;
+    if (_currentFunctionName.isEmpty || _memoryManager == null) {
+      // If memory manager isn't available, send error back
+      if (_currentFunctionCallId.isNotEmpty) {
+        _wsSend({
+          'type': 'conversation.item.create',
+          'item': {
+            'type': 'function_call_output',
+            'call_id': _currentFunctionCallId,
+            'output': jsonEncode({
+              'success': false,
+              'error': 'Sistema de memória indisponível',
+            }),
+          },
+        });
+        _wsSend({'type': 'response.create'});
+        _currentFunctionCallId = '';
+        _currentFunctionName = '';
+        _currentFunctionArgs = '';
+      }
+      return;
+    }
 
     try {
       debugPrint('Handling function call: $_currentFunctionName');
 
       // Route to memory manager
-      final result = await _memoryManager.handleFunctionCall(
+      final result = await _memoryManager!.handleFunctionCall(
         _currentFunctionName,
         _currentFunctionArgs,
       );
@@ -523,9 +545,10 @@ class _MainChatPageState extends State<MainChatPage> {
 
       // Reload memory facts if a new fact was stored
       if (_currentFunctionName == 'store_memory_fact' &&
-          result['success'] == true) {
+          result['success'] == true &&
+          _memoryRepository != null) {
         try {
-          _memoryFacts = await _memoryRepository.getFactsForUser();
+          _memoryFacts = await _memoryRepository!.getFactsForUser();
           debugPrint('Reloaded ${_memoryFacts.length} memory facts');
         } catch (e) {
           debugPrint('Error reloading memory facts: $e');
@@ -672,7 +695,7 @@ class _MainChatPageState extends State<MainChatPage> {
     );
 
     // Append guardrails section
-    final guardrailsSection = _guardrails.getGuardrailSystemPromptSection();
+    final guardrailsSection = _guardrails?.getGuardrailSystemPromptSection() ?? '';
 
     // Append critical language and behavior rules
     final languageRules = '''
