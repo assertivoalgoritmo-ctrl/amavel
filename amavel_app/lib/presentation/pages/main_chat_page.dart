@@ -301,9 +301,9 @@ class _MainChatPageState extends State<MainChatPage> {
       },
       'turn_detection': {
         'type': 'server_vad',
-        'threshold': 0.5,
+        'threshold': 0.7,
         'prefix_padding_ms': 300,
-        'silence_duration_ms': 1200,
+        'silence_duration_ms': 1800,
       },
       'max_response_output_tokens': 500,
     };
