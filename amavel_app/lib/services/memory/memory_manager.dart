@@ -8,59 +8,57 @@ class MemoryManager {
 
   const MemoryManager(this._repository);
 
-  /// Returns function calling tool definitions for LLM
+  /// Returns function calling tool definitions for OpenAI Realtime API
+  /// NOTE: Realtime API uses flat format (name/description/parameters at top level)
+  /// NOT the nested Chat Completions format (function: {name, description, parameters})
   List<Map<String, dynamic>> getMemoryTools() {
     return [
       {
         'type': 'function',
-        'function': {
-          'name': 'store_memory_fact',
-          'description':
-              'Armazena um facto importante sobre o utilizador para referências futuras em português europeu.',
-          'parameters': {
-            'type': 'object',
-            'properties': {
-              'category': {
-                'type': 'string',
-                'enum': ['family', 'health', 'preference', 'schedule', 'history'],
-                'description': 'Categoria do facto (família, saúde, preferência, rotina, história)'
-              },
-              'key': {
-                'type': 'string',
-                'description':
-                    'Chave identificadora do facto (ex: "nome_filha", "alergia_amendoim")'
-              },
-              'value': {
-                'type': 'string',
-                'description': 'Valor descritivo do facto em português'
-              },
-              'confidence': {
-                'type': 'number',
-                'description':
-                    'Confiança na extração (0.0 a 1.0). Apenas factos com confiança >= 0.7 serão armazenados.',
-                'minimum': 0.0,
-                'maximum': 1.0
-              }
+        'name': 'store_memory_fact',
+        'description':
+            'Armazena um facto importante sobre o utilizador para referências futuras em português europeu.',
+        'parameters': {
+          'type': 'object',
+          'properties': {
+            'category': {
+              'type': 'string',
+              'enum': ['family', 'health', 'preference', 'schedule', 'history'],
+              'description': 'Categoria do facto (família, saúde, preferência, rotina, história)'
             },
-            'required': ['category', 'key', 'value', 'confidence']
-          }
+            'key': {
+              'type': 'string',
+              'description':
+                  'Chave identificadora do facto (ex: "nome_filha", "alergia_amendoim")'
+            },
+            'value': {
+              'type': 'string',
+              'description': 'Valor descritivo do facto em português'
+            },
+            'confidence': {
+              'type': 'number',
+              'description':
+                  'Confiança na extração (0.0 a 1.0). Apenas factos com confiança >= 0.7 serão armazenados.',
+              'minimum': 0.0,
+              'maximum': 1.0
+            }
+          },
+          'required': ['category', 'key', 'value', 'confidence']
         }
       },
       {
         'type': 'function',
-        'function': {
-          'name': 'get_memory_facts',
-          'description':
-              'Recupera factos memorizados sobre o utilizador, opcionalmente filtrados por categoria.',
-          'parameters': {
-            'type': 'object',
-            'properties': {
-              'category': {
-                'type': 'string',
-                'enum': ['family', 'health', 'preference', 'schedule', 'history', 'all'],
-                'description':
-                    'Categoria de factos a recuperar, ou "all" para todos (padrão: all)'
-              }
+        'name': 'get_memory_facts',
+        'description':
+            'Recupera factos memorizados sobre o utilizador, opcionalmente filtrados por categoria.',
+        'parameters': {
+          'type': 'object',
+          'properties': {
+            'category': {
+              'type': 'string',
+              'enum': ['family', 'health', 'preference', 'schedule', 'history', 'all'],
+              'description':
+                  'Categoria de factos a recuperar, ou "all" para todos (padrão: all)'
             }
           }
         }
