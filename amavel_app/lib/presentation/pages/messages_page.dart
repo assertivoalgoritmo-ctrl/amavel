@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:amavel_app/config/theme.dart';
+import 'package:amavel_app/core/constants.dart';
 import 'package:amavel_app/presentation/widgets/elder_nav_bar.dart';
 
 class MessagesPage extends StatelessWidget {
@@ -59,7 +60,11 @@ class MessagesPage extends StatelessWidget {
           ElderNavBar(
             currentIndex: 1,
             onTap: (index) {
-              // Navigation handling will be done at the router level
+              if (index == 0) {
+                Navigator.of(context).pushReplacementNamed(AppConstants.routeHome);
+              } else if (index == 2) {
+                Navigator.of(context).pushReplacementNamed(AppConstants.routeSettings);
+              }
             },
           ),
         ],
