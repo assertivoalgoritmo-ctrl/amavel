@@ -103,7 +103,6 @@ class _MainChatPageState extends State<MainChatPage> {
       debugPrint('All services initialized successfully');
     } catch (e) {
       debugPrint('Error initializing Firebase services (will work without memory/alerts): $e');
-      // Voice conversation will still work without these services
     }
 
     _initRecorder();
@@ -176,7 +175,6 @@ class _MainChatPageState extends State<MainChatPage> {
 
   Future<void> _onOrbTap() async {
     if (_voiceState == VoiceState.error) {
-      // Retry on error
       await _startSession();
       return;
     }
@@ -193,13 +191,11 @@ class _MainChatPageState extends State<MainChatPage> {
   // ====================================================
 
   Future<void> _startSession() async {
-    // Check API key
     if (!ApiKeys.hasOpenAiKey) {
       _setError('Chave da API OpenAI não configurada.');
       return;
     }
 
-    // Request mic permission
     final micStatus = await Permission.microphone.request();
     if (!micStatus.isGranted) {
       _setError('Permissão de microfone necessária.');
@@ -214,10 +210,7 @@ class _MainChatPageState extends State<MainChatPage> {
     });
 
     try {
-      // 1. Connect WebSocket
       await _connectWs();
-
-      // 2. Start recording
       await _startRecording();
 
       _sessionActive = true;
@@ -260,7 +253,6 @@ class _MainChatPageState extends State<MainChatPage> {
       },
     );
 
-    // Listen for messages
     _channel!.stream.listen(
       _onWsMessage,
       onError: (e) {
@@ -279,17 +271,12 @@ class _MainChatPageState extends State<MainChatPage> {
       },
     );
 
-    // Wait briefly for the connection
     await Future.delayed(const Duration(milliseconds: 800));
     _wsConnected = true;
 
-    // Build dynamic system prompt
     final systemPrompt = _buildSystemPrompt();
-
-    // Build tools list from memory manager (if available)
     final memoryTools = _memoryManager?.getMemoryTools() ?? [];
 
-    // Build session config
     final sessionConfig = <String, dynamic>{
       'modalities': ['text', 'audio'],
       'instructions': systemPrompt,
@@ -308,13 +295,11 @@ class _MainChatPageState extends State<MainChatPage> {
       'max_response_output_tokens': 500,
     };
 
-    // Only add tools if memory manager is available
     if (memoryTools.isNotEmpty) {
       sessionConfig['tools'] = memoryTools;
       sessionConfig['tool_choice'] = 'auto';
     }
 
-    // Send session configuration
     _wsSend({
       'type': 'session.update',
       'session': sessionConfig,
@@ -351,13 +336,11 @@ class _MainChatPageState extends State<MainChatPage> {
       debugPrint('WS event: $type');
 
       switch (type) {
-        // Session established
         case 'session.created':
         case 'session.updated':
           debugPrint('Session ready');
           break;
 
-        // User speech detected
         case 'input_audio_buffer.speech_started':
           setState(() {
             _voiceState = VoiceState.listening;
@@ -365,7 +348,6 @@ class _MainChatPageState extends State<MainChatPage> {
           });
           break;
 
-        // User stopped speaking
         case 'input_audio_buffer.speech_stopped':
           setState(() {
             _voiceState = VoiceState.thinking;
@@ -374,19 +356,16 @@ class _MainChatPageState extends State<MainChatPage> {
           });
           break;
 
-        // User transcript completed
         case 'conversation.item.input_audio_transcription.completed':
           final transcript = data['transcript'] as String? ?? '';
           if (transcript.isNotEmpty) {
             setState(() {
               _userMessage = transcript;
             });
-            // Run distress detection asynchronously
             _analyzeUserTranscript(transcript);
           }
           break;
 
-        // Assistant response started
         case 'response.created':
           _partialTranscript = '';
           _responseAudioBytes = [];
@@ -396,7 +375,6 @@ class _MainChatPageState extends State<MainChatPage> {
           });
           break;
 
-        // Assistant text arriving
         case 'response.audio_transcript.delta':
           final delta = data['delta'] as String? ?? '';
           _partialTranscript += delta;
@@ -406,7 +384,6 @@ class _MainChatPageState extends State<MainChatPage> {
           });
           break;
 
-        // Assistant audio arriving
         case 'response.audio.delta':
           final b64 = data['delta'] as String?;
           if (b64 != null) {
@@ -417,18 +394,15 @@ class _MainChatPageState extends State<MainChatPage> {
           }
           break;
 
-        // Audio generation finished — play it
         case 'response.audio.done':
           _playResponseAudio();
           break;
 
-        // Function call arguments accumulating
         case 'response.function_call_arguments.delta':
           final delta = data['delta'] as String? ?? '';
           _currentFunctionArgs += delta;
           break;
 
-        // Function call complete — handle it
         case 'response.function_call_arguments.done':
           _currentFunctionCallId = data['call_id'] as String? ?? '';
           _currentFunctionName = data['name'] as String? ?? '';
@@ -437,12 +411,10 @@ class _MainChatPageState extends State<MainChatPage> {
           _handleFunctionCall();
           break;
 
-        // Full response complete
         case 'response.done':
           debugPrint('Response done');
           break;
 
-        // Errors from OpenAI
         case 'error':
           final errMsg = (data['error'] as Map?)?['message'] ?? 'Erro desconhecido';
           debugPrint('OpenAI error: $errMsg');
@@ -455,7 +427,7 @@ class _MainChatPageState extends State<MainChatPage> {
   }
 
   // ====================================================
-  // Distress detection (runs on user transcripts)
+  // Distress detection
   // ====================================================
 
   Future<void> _analyzeUserTranscript(String transcript) async {
@@ -467,12 +439,9 @@ class _MainChatPageState extends State<MainChatPage> {
       if (!result.isSafe) {
         debugPrint('Safety alert: ${result.severity} — ${result.detectedPatterns}');
 
-        // Dispatch alert for critical and high severity
         if ((result.severity == 'critical' || result.severity == 'high') &&
             _alertDispatcher != null) {
           final userId = _userId ?? 'anonymous';
-
-          // Use the distress detector directly for the AlertDispatcher
           final detector = DistressDetector();
           final distress = detector.detectDistress(transcript);
 
@@ -486,7 +455,6 @@ class _MainChatPageState extends State<MainChatPage> {
       }
     } catch (e) {
       debugPrint('Error in distress analysis: $e');
-      // Don't let analysis errors affect the conversation
     }
   }
 
@@ -496,7 +464,6 @@ class _MainChatPageState extends State<MainChatPage> {
 
   Future<void> _handleFunctionCall() async {
     if (_currentFunctionName.isEmpty || _memoryManager == null) {
-      // If memory manager isn't available, send error back
       if (_currentFunctionCallId.isNotEmpty) {
         _wsSend({
           'type': 'conversation.item.create',
@@ -520,7 +487,6 @@ class _MainChatPageState extends State<MainChatPage> {
     try {
       debugPrint('Handling function call: $_currentFunctionName');
 
-      // Route to memory manager
       final result = await _memoryManager!.handleFunctionCall(
         _currentFunctionName,
         _currentFunctionArgs,
@@ -528,7 +494,6 @@ class _MainChatPageState extends State<MainChatPage> {
 
       debugPrint('Function result: $result');
 
-      // Send function result back to OpenAI
       _wsSend({
         'type': 'conversation.item.create',
         'item': {
@@ -538,12 +503,10 @@ class _MainChatPageState extends State<MainChatPage> {
         },
       });
 
-      // Trigger response generation after function call
       _wsSend({
         'type': 'response.create',
       });
 
-      // Reload memory facts if a new fact was stored
       if (_currentFunctionName == 'store_memory_fact' &&
           result['success'] == true &&
           _memoryRepository != null) {
@@ -557,7 +520,6 @@ class _MainChatPageState extends State<MainChatPage> {
     } catch (e) {
       debugPrint('Error handling function call: $e');
 
-      // Send error result back
       _wsSend({
         'type': 'conversation.item.create',
         'item': {
@@ -574,7 +536,6 @@ class _MainChatPageState extends State<MainChatPage> {
         'type': 'response.create',
       });
     } finally {
-      // Reset function call state
       _currentFunctionCallId = '';
       _currentFunctionName = '';
       _currentFunctionArgs = '';
@@ -590,7 +551,6 @@ class _MainChatPageState extends State<MainChatPage> {
 
     _recorderStreamCtrl = StreamController<Uint8List>();
 
-    // Listen for audio data and send to OpenAI
     _recorderStreamCtrl!.stream.listen((data) {
       if (_wsConnected) {
         final b64 = base64Encode(data);
@@ -625,7 +585,6 @@ class _MainChatPageState extends State<MainChatPage> {
 
   Future<void> _playResponseAudio() async {
     if (_responseAudioBytes.isEmpty) {
-      // No audio — just go back to listening
       if (_sessionActive) {
         setState(() => _voiceState = VoiceState.listening);
       }
@@ -633,28 +592,22 @@ class _MainChatPageState extends State<MainChatPage> {
     }
 
     try {
-      // Convert PCM16 to WAV
       final pcm = Uint8List.fromList(_responseAudioBytes);
       final wav = AudioUtils.pcmToWav(pcm, sampleRate: 24000, channels: 1);
 
-      // Write to temp file
       final dir = await getTemporaryDirectory();
       final file = File('${dir.path}/amavel_response_${DateTime.now().millisecondsSinceEpoch}.wav');
       await file.writeAsBytes(wav);
 
-      // Play
       await _player.setFilePath(file.path);
       await _player.play();
 
-      // Wait for playback to finish
       await _player.playerStateStream.firstWhere(
         (state) => state.processingState == ja.ProcessingState.completed,
       );
 
-      // Clean up temp file
       try { await file.delete(); } catch (_) {}
 
-      // Return to listening if session still active
       if (_sessionActive && mounted) {
         setState(() {
           _voiceState = VoiceState.listening;
@@ -669,11 +622,10 @@ class _MainChatPageState extends State<MainChatPage> {
   }
 
   // ====================================================
-  // System prompt (dynamic, with user context + memory + guardrails)
+  // System prompt
   // ====================================================
 
   String _buildSystemPrompt() {
-    // Build UserProfile from loaded context
     UserProfile? userProfile;
     if (_userName != null && _userName!.isNotEmpty) {
       userProfile = UserProfile(
@@ -688,16 +640,13 @@ class _MainChatPageState extends State<MainChatPage> {
       );
     }
 
-    // Use SystemPromptBuilder for the base + user context + memory facts
     final basePrompt = SystemPromptBuilder.buildPrompt(
       user: userProfile,
       facts: _memoryFacts.isNotEmpty ? _memoryFacts : null,
     );
 
-    // Append guardrails section
     final guardrailsSection = _guardrails?.getGuardrailSystemPromptSection() ?? '';
 
-    // Append critical language and behavior rules
     final languageRules = '''
 
 --- REGRA ABSOLUTA DE LÍNGUA ---
@@ -737,6 +686,18 @@ Usa vocabulário e expressões de Portugal (ex: "telemóvel" e não "celular", "
   }
 
   // ====================================================
+  // Navigation helper
+  // ====================================================
+
+  void _navigateToTab(int index) {
+    if (index == 1) {
+      Navigator.of(context).pushReplacementNamed(AppConstants.routeMessages);
+    } else if (index == 2) {
+      Navigator.of(context).pushReplacementNamed(AppConstants.routeSettings);
+    }
+  }
+
+  // ====================================================
   // Build UI
   // ====================================================
 
@@ -749,7 +710,6 @@ Usa vocabulário e expressões de Portugal (ex: "telemóvel" e não "celular", "
           children: [
             const SizedBox(height: 24),
 
-            // Main content
             Expanded(
               child: SingleChildScrollView(
                 child: Column(
@@ -757,7 +717,6 @@ Usa vocabulário e expressões de Portugal (ex: "telemóvel" e não "celular", "
                   children: [
                     const SizedBox(height: 40),
 
-                    // Animated Orb
                     GestureDetector(
                       onTap: _onOrbTap,
                       child: AnimatedOrb(
@@ -767,13 +726,11 @@ Usa vocabulário e expressões de Portugal (ex: "telemóvel" e não "celular", "
                     ),
                     const SizedBox(height: 48),
 
-                    // Status Indicator
                     StatusIndicator(
                       state: _voiceState,
                     ),
                     const SizedBox(height: 32),
 
-                    // Transcript Bubbles
                     Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 20),
                       child: Column(
@@ -794,7 +751,6 @@ Usa vocabulário e expressões de Portugal (ex: "telemóvel" e não "celular", "
                     ),
                     const SizedBox(height: 48),
 
-                    // Error display
                     if (_errorMessage.isNotEmpty)
                       Padding(
                         padding: const EdgeInsets.symmetric(horizontal: 20),
@@ -820,12 +776,10 @@ Usa vocabulário e expressões de Portugal (ex: "telemóvel" e não "celular", "
               ),
             ),
 
-            // Bottom Navigation Bar
+            // Bottom Navigation Bar with working navigation
             ElderNavBar(
               currentIndex: 0,
-              onTap: (index) {
-                // Navigation will be handled at router level
-              },
+              onTap: _navigateToTab,
             ),
           ],
         ),
