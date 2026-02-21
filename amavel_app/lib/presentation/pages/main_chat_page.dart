@@ -295,7 +295,7 @@ class _MainChatPageState extends State<MainChatPage> {
         'prefix_padding_ms': 300,
         'silence_duration_ms': 1800,
       },
-      'max_response_output_tokens': 400,
+      'max_response_output_tokens': 'inf',
     };
 
     if (memoryTools.isNotEmpty) {
