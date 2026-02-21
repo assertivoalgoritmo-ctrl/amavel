@@ -63,6 +63,9 @@ class _MainChatPageState extends State<MainChatPage> {
   // --- Session active flag ---
   bool _sessionActive = false;
 
+  // --- Playback flag (used for echo cancellation) ---
+  bool _isPlaying = false;
+
   // --- User context (loaded from SharedPreferences) ---
   String? _userId;
   String? _userName;
@@ -292,7 +295,7 @@ class _MainChatPageState extends State<MainChatPage> {
         'prefix_padding_ms': 300,
         'silence_duration_ms': 1800,
       },
-      'max_response_output_tokens': 300,
+      'max_response_output_tokens': 400,
     };
 
     if (memoryTools.isNotEmpty) {
@@ -325,6 +328,32 @@ class _MainChatPageState extends State<MainChatPage> {
   }
 
   // ====================================================
+  // Echo cancellation: pause/resume recording during playback
+  // ====================================================
+
+  Future<void> _pauseRecording() async {
+    try {
+      if (_recorder.isRecording) {
+        await _recorder.pauseRecorder();
+        debugPrint('Recording paused (echo cancellation)');
+      }
+    } catch (e) {
+      debugPrint('Error pausing recorder: $e');
+    }
+  }
+
+  Future<void> _resumeRecording() async {
+    try {
+      if (_recorder.isPaused) {
+        await _recorder.resumeRecorder();
+        debugPrint('Recording resumed');
+      }
+    } catch (e) {
+      debugPrint('Error resuming recorder: $e');
+    }
+  }
+
+  // ====================================================
   // Handle incoming WebSocket messages
   // ====================================================
 
@@ -342,6 +371,11 @@ class _MainChatPageState extends State<MainChatPage> {
           break;
 
         case 'input_audio_buffer.speech_started':
+          // Ignore speech detection while we are playing audio (echo cancellation)
+          if (_isPlaying) {
+            debugPrint('Ignoring speech_started during playback (echo)');
+            break;
+          }
           setState(() {
             _voiceState = VoiceState.listening;
             _userMessage = 'A ouvir...';
@@ -349,6 +383,10 @@ class _MainChatPageState extends State<MainChatPage> {
           break;
 
         case 'input_audio_buffer.speech_stopped':
+          if (_isPlaying) {
+            debugPrint('Ignoring speech_stopped during playback (echo)');
+            break;
+          }
           setState(() {
             _voiceState = VoiceState.thinking;
             _userMessage = '';
@@ -357,6 +395,11 @@ class _MainChatPageState extends State<MainChatPage> {
           break;
 
         case 'conversation.item.input_audio_transcription.completed':
+          // Ignore transcriptions that arrive during or right after playback (echo)
+          if (_isPlaying) {
+            debugPrint('Ignoring echo transcription during playback');
+            break;
+          }
           final transcript = data['transcript'] as String? ?? '';
           if (transcript.isNotEmpty) {
             setState(() {
@@ -551,8 +594,10 @@ class _MainChatPageState extends State<MainChatPage> {
 
     _recorderStreamCtrl = StreamController<Uint8List>();
 
+    // Listen for audio data and send to OpenAI
+    // Only send audio when NOT playing back (echo cancellation)
     _recorderStreamCtrl!.stream.listen((data) {
-      if (_wsConnected) {
+      if (_wsConnected && !_isPlaying) {
         final b64 = base64Encode(data);
         _wsSend({
           'type': 'input_audio_buffer.append',
@@ -580,7 +625,7 @@ class _MainChatPageState extends State<MainChatPage> {
   }
 
   // ====================================================
-  // Audio playback
+  // Audio playback (with echo cancellation)
   // ====================================================
 
   Future<void> _playResponseAudio() async {
@@ -592,22 +637,42 @@ class _MainChatPageState extends State<MainChatPage> {
     }
 
     try {
+      // --- Echo cancellation: pause recording while playing ---
+      _isPlaying = true;
+      await _pauseRecording();
+
+      // Convert PCM16 to WAV
       final pcm = Uint8List.fromList(_responseAudioBytes);
       final wav = AudioUtils.pcmToWav(pcm, sampleRate: 24000, channels: 1);
 
+      // Write to temp file
       final dir = await getTemporaryDirectory();
       final file = File('${dir.path}/amavel_response_${DateTime.now().millisecondsSinceEpoch}.wav');
       await file.writeAsBytes(wav);
 
+      // Play
       await _player.setFilePath(file.path);
       await _player.play();
 
+      // Wait for playback to finish
       await _player.playerStateStream.firstWhere(
         (state) => state.processingState == ja.ProcessingState.completed,
       );
 
+      // Clean up temp file
       try { await file.delete(); } catch (_) {}
 
+      // --- Echo cancellation: small delay then resume recording ---
+      // The delay ensures any residual speaker audio dissipates
+      await Future.delayed(const Duration(milliseconds: 300));
+      _isPlaying = false;
+      await _resumeRecording();
+
+      // Clear any audio that accumulated in the buffer during playback
+      // This prevents OpenAI from processing echo audio that was captured
+      _wsSend({'type': 'input_audio_buffer.clear'});
+
+      // Return to listening if session still active
       if (_sessionActive && mounted) {
         setState(() {
           _voiceState = VoiceState.listening;
@@ -615,6 +680,8 @@ class _MainChatPageState extends State<MainChatPage> {
       }
     } catch (e) {
       debugPrint('Playback error: $e');
+      _isPlaying = false;
+      await _resumeRecording();
       if (_sessionActive && mounted) {
         setState(() => _voiceState = VoiceState.listening);
       }
@@ -664,6 +731,14 @@ Usa vocabulário e expressões de Portugal (ex: "telemóvel" e não "celular", "
 - Fala de forma clara, simples e calorosa.
 - Nunca sejas condescendente.
 - Se não souberes algo, diz simplesmente que não sabes.
+
+--- REGRAS ANTI-REPETIÇÃO (CRÍTICO) ---
+- NUNCA repitas a mesma ideia duas vezes na mesma resposta ou em respostas consecutivas.
+- Quando o utilizador pede silêncio ou descanso, responde UMA VEZ de forma breve e depois PÁRA. Não continues a falar.
+- Cada resposta deve trazer algo NOVO à conversa. Se não tens nada novo a dizer, faz uma pergunta curta ou fica em silêncio.
+- NUNCA fales contigo mesma. Espera SEMPRE que o utilizador fale antes de responderes.
+- Se não houve input do utilizador, NÃO respondas. O silêncio é aceitável.
+- Uma resposta = uma ideia. Não empilhes múltiplas despedidas ou reformulações da mesma mensagem.
 
 --- MEMÓRIA ---
 - Quando o utilizador partilhar informação pessoal (nomes de família, aniversários, preferências, gostos), usa a função store_memory_fact para guardar.
