@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:amavel_app/config/theme.dart';
+import 'package:amavel_app/core/constants.dart';
 import 'package:amavel_app/presentation/widgets/elder_nav_bar.dart';
 
 class SettingsPage extends StatefulWidget {
@@ -141,7 +142,7 @@ class _SettingsPageState extends State<SettingsPage> {
                           SnackBar(
                             content: Text(
                               'AMAVEL v1.0.0 - A sua companheira de confiança',
-                              style: TextStyle(fontSize: AmavelTheme.textSizeBody, color: Colors.white),
+                              style: const TextStyle(fontSize: 16, color: Colors.white),
                             ),
                             backgroundColor: AmavelTheme.primaryColor,
                           ),
@@ -159,7 +160,11 @@ class _SettingsPageState extends State<SettingsPage> {
           ElderNavBar(
             currentIndex: 2,
             onTap: (index) {
-              // Navigation handling will be done at the router level
+              if (index == 0) {
+                Navigator.of(context).pushReplacementNamed(AppConstants.routeHome);
+              } else if (index == 1) {
+                Navigator.of(context).pushReplacementNamed(AppConstants.routeMessages);
+              }
             },
           ),
         ],
