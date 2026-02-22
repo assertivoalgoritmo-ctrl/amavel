@@ -4,34 +4,29 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
-import 'package:flutter_sound/flutter_sound.dart';
+import 'package:flutter_sound/public/flutter_sound_recorder.dart';
 import 'package:just_audio/just_audio.dart' as ja;
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import 'package:web_socket_channel/io.dart';
 
 import 'package:amavel_app/config/api_keys.dart';
+import 'package:amavel_app/config/constants.dart';
 import 'package:amavel_app/config/theme.dart';
-import 'package:amavel_app/core/constants.dart';
 import 'package:amavel_app/core/utils/audio_utils.dart';
 import 'package:amavel_app/domain/enums/voice_state.dart';
-import 'package:amavel_app/domain/models/memory_fact.dart';
-import 'package:amavel_app/domain/models/user_profile.dart';
-import 'package:amavel_app/data/repositories/alert_repository.dart';
-import 'package:amavel_app/data/repositories/memory_repository.dart';
-import 'package:amavel_app/services/memory/memory_manager.dart';
-import 'package:amavel_app/services/memory/system_prompt_builder.dart';
-import 'package:amavel_app/services/safety/alert_dispatcher.dart';
-import 'package:amavel_app/services/safety/distress_detector.dart';
-import 'package:amavel_app/services/safety/guardrails_service.dart';
 import 'package:amavel_app/presentation/widgets/animated_orb.dart';
 import 'package:amavel_app/presentation/widgets/status_indicator.dart';
 import 'package:amavel_app/presentation/widgets/transcript_bubble.dart';
 import 'package:amavel_app/presentation/widgets/elder_nav_bar.dart';
+import 'package:amavel_app/services/memory/memory_manager.dart';
+import 'package:amavel_app/services/safety/distress_detector.dart';
+import 'package:amavel_app/data/repositories/memory_repository.dart';
+import 'package:amavel_app/data/datasources/firestore_datasource.dart';
 
 /// Main chat page with full OpenAI Realtime voice pipeline.
-/// Integrates: voice conversation, memory system, distress detection, alerts.
+/// Includes echo cancellation, memory system, distress detection,
+/// and Phase 1 enriched companion personality.
 class MainChatPage extends StatefulWidget {
   const MainChatPage({Key? key}) : super(key: key);
 
@@ -42,7 +37,7 @@ class MainChatPage extends StatefulWidget {
 class _MainChatPageState extends State<MainChatPage> {
   // --- Voice state ---
   VoiceState _voiceState = VoiceState.idle;
-  String _assistantMessage = 'Olá! Toque no círculo para falar comigo.';
+  String _assistantMessage = 'Olá! Toca no círculo para falar comigo.';
   String _userMessage = '';
   String _errorMessage = '';
 
@@ -63,28 +58,12 @@ class _MainChatPageState extends State<MainChatPage> {
   // --- Session active flag ---
   bool _sessionActive = false;
 
-  // --- Playback flag (used for echo cancellation) ---
+  // --- Echo cancellation ---
   bool _isPlaying = false;
 
-  // --- User context (loaded from SharedPreferences) ---
-  String? _userId;
-  String? _userName;
-  DateTime? _userBirthdate;
-
-  // --- Memory system (nullable — graceful degradation if Firebase fails) ---
-  MemoryRepository? _memoryRepository;
+  // --- Services (nullable, initialized in initState) ---
   MemoryManager? _memoryManager;
-  List<MemoryFact> _memoryFacts = [];
-
-  // --- Safety systems (nullable — graceful degradation if Firebase fails) ---
-  GuardrailsService? _guardrails;
-  AlertRepository? _alertRepository;
-  AlertDispatcher? _alertDispatcher;
-
-  // --- Function call tracking ---
-  String _currentFunctionCallId = '';
-  String _currentFunctionName = '';
-  String _currentFunctionArgs = '';
+  DistressDetector? _distressDetector;
 
   // ====================================================
   // Lifecycle
@@ -93,23 +72,19 @@ class _MainChatPageState extends State<MainChatPage> {
   @override
   void initState() {
     super.initState();
-
-    // Initialize safety services (no Firebase dependency)
-    _guardrails = GuardrailsService();
-
-    // Initialize Firebase-dependent services safely
-    try {
-      _memoryRepository = MemoryRepository();
-      _memoryManager = MemoryManager(_memoryRepository!);
-      _alertRepository = AlertRepository();
-      _alertDispatcher = AlertDispatcher(_alertRepository!);
-      debugPrint('All services initialized successfully');
-    } catch (e) {
-      debugPrint('Error initializing Firebase services (will work without memory/alerts): $e');
-    }
-
     _initRecorder();
-    _loadUserContext();
+    _initServices();
+  }
+
+  Future<void> _initServices() async {
+    try {
+      final datasource = FirestoreDataSource();
+      final memoryRepo = MemoryRepository(datasource);
+      _memoryManager = MemoryManager(memoryRepo);
+      _distressDetector = DistressDetector();
+    } catch (e) {
+      debugPrint('Services init error: $e');
+    }
   }
 
   @override
@@ -138,50 +113,11 @@ class _MainChatPageState extends State<MainChatPage> {
     }
   }
 
-  /// Load user context from SharedPreferences and memory facts from Firestore
-  Future<void> _loadUserContext() async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      _userId = prefs.getString(AppConstants.prefUserId);
-      _userName = prefs.getString(AppConstants.prefUserName);
-
-      final birthdateStr = prefs.getString(AppConstants.prefUserBirthdate);
-      if (birthdateStr != null) {
-        _userBirthdate = DateTime.tryParse(birthdateStr);
-      }
-
-      // Update greeting with user name
-      if (_userName != null && _userName!.isNotEmpty && mounted) {
-        setState(() {
-          _assistantMessage = 'Olá, $_userName! Toque no círculo para falar comigo.';
-        });
-      }
-    } catch (e) {
-      debugPrint('Error loading user context: $e');
-    }
-
-    // Load memory facts (Firestore, may fail if not authenticated)
-    if (_memoryRepository != null) {
-      try {
-        _memoryFacts = await _memoryRepository!.getFactsForUser();
-        debugPrint('Loaded ${_memoryFacts.length} memory facts');
-      } catch (e) {
-        debugPrint('Error loading memory facts (may not be authenticated): $e');
-        _memoryFacts = [];
-      }
-    }
-  }
-
   // ====================================================
   // Tap handler — start / stop voice session
   // ====================================================
 
   Future<void> _onOrbTap() async {
-    if (_voiceState == VoiceState.error) {
-      await _startSession();
-      return;
-    }
-
     if (_sessionActive) {
       await _endSession();
     } else {
@@ -215,11 +151,10 @@ class _MainChatPageState extends State<MainChatPage> {
     try {
       await _connectWs();
       await _startRecording();
-
       _sessionActive = true;
       setState(() {
         _voiceState = VoiceState.listening;
-        _assistantMessage = 'Estou a ouvir... fale comigo!';
+        _assistantMessage = 'Estou a ouvir... fala comigo!';
       });
     } catch (e) {
       _setError('Erro ao iniciar: $e');
@@ -232,9 +167,7 @@ class _MainChatPageState extends State<MainChatPage> {
     await _disconnectWs();
     setState(() {
       _voiceState = VoiceState.idle;
-      _assistantMessage = _userName != null && _userName!.isNotEmpty
-          ? 'Até já, $_userName! Toque no círculo para falar comigo.'
-          : 'Toque no círculo para falar comigo.';
+      _assistantMessage = 'Toca no círculo para falar comigo.';
       _userMessage = '';
     });
   }
@@ -277,35 +210,29 @@ class _MainChatPageState extends State<MainChatPage> {
     await Future.delayed(const Duration(milliseconds: 800));
     _wsConnected = true;
 
-    final systemPrompt = _buildSystemPrompt();
-    final memoryTools = _memoryManager?.getMemoryTools() ?? [];
-
-    final sessionConfig = <String, dynamic>{
-      'modalities': ['text', 'audio'],
-      'instructions': systemPrompt,
-      'voice': 'coral',
-      'input_audio_format': 'pcm16',
-      'output_audio_format': 'pcm16',
-      'input_audio_transcription': {
-        'model': 'whisper-1',
-      },
-      'turn_detection': {
-        'type': 'server_vad',
-        'threshold': 0.7,
-        'prefix_padding_ms': 300,
-        'silence_duration_ms': 1800,
-      },
-      'max_response_output_tokens': 'inf',
-    };
-
-    if (memoryTools.isNotEmpty) {
-      sessionConfig['tools'] = memoryTools;
-      sessionConfig['tool_choice'] = 'auto';
-    }
+    // Build tools list from memory manager
+    final tools = _memoryManager?.getMemoryTools() ?? [];
 
     _wsSend({
       'type': 'session.update',
-      'session': sessionConfig,
+      'session': {
+        'modalities': ['text', 'audio'],
+        'instructions': _buildSystemPrompt(),
+        'voice': 'nova',
+        'input_audio_format': 'pcm16',
+        'output_audio_format': 'pcm16',
+        'input_audio_transcription': {
+          'model': 'whisper-1',
+        },
+        'turn_detection': {
+          'type': 'server_vad',
+          'threshold': 0.7,
+          'prefix_padding_ms': 300,
+          'silence_duration_ms': 1800,
+        },
+        'tools': tools,
+        'max_response_output_tokens': 'inf',
+      },
     });
   }
 
@@ -328,17 +255,16 @@ class _MainChatPageState extends State<MainChatPage> {
   }
 
   // ====================================================
-  // Echo cancellation: pause/resume recording during playback
+  // Echo cancellation helpers
   // ====================================================
 
   Future<void> _pauseRecording() async {
     try {
       if (_recorder.isRecording) {
         await _recorder.pauseRecorder();
-        debugPrint('Recording paused (echo cancellation)');
       }
     } catch (e) {
-      debugPrint('Error pausing recorder: $e');
+      debugPrint('Pause recording error: $e');
     }
   }
 
@@ -346,10 +272,9 @@ class _MainChatPageState extends State<MainChatPage> {
     try {
       if (_recorder.isPaused) {
         await _recorder.resumeRecorder();
-        debugPrint('Recording resumed');
       }
     } catch (e) {
-      debugPrint('Error resuming recorder: $e');
+      debugPrint('Resume recording error: $e');
     }
   }
 
@@ -362,31 +287,24 @@ class _MainChatPageState extends State<MainChatPage> {
       final data = jsonDecode(raw as String) as Map<String, dynamic>;
       final type = data['type'] as String? ?? '';
 
-      debugPrint('WS event: $type');
-
       switch (type) {
         case 'session.created':
         case 'session.updated':
           debugPrint('Session ready');
           break;
 
+        // User speech detected — ignore during playback (echo cancellation)
         case 'input_audio_buffer.speech_started':
-          // Ignore speech detection while we are playing audio (echo cancellation)
-          if (_isPlaying) {
-            debugPrint('Ignoring speech_started during playback (echo)');
-            break;
-          }
+          if (_isPlaying) return;
           setState(() {
             _voiceState = VoiceState.listening;
             _userMessage = 'A ouvir...';
           });
           break;
 
+        // User stopped speaking
         case 'input_audio_buffer.speech_stopped':
-          if (_isPlaying) {
-            debugPrint('Ignoring speech_stopped during playback (echo)');
-            break;
-          }
+          if (_isPlaying) return;
           setState(() {
             _voiceState = VoiceState.thinking;
             _userMessage = '';
@@ -394,21 +312,19 @@ class _MainChatPageState extends State<MainChatPage> {
           });
           break;
 
+        // User transcript
         case 'conversation.item.input_audio_transcription.completed':
-          // Ignore transcriptions that arrive during or right after playback (echo)
-          if (_isPlaying) {
-            debugPrint('Ignoring echo transcription during playback');
-            break;
-          }
           final transcript = data['transcript'] as String? ?? '';
           if (transcript.isNotEmpty) {
             setState(() {
               _userMessage = transcript;
             });
-            _analyzeUserTranscript(transcript);
+            // Run distress detection on user transcript
+            _checkDistress(transcript);
           }
           break;
 
+        // Assistant response started
         case 'response.created':
           _partialTranscript = '';
           _responseAudioBytes = [];
@@ -418,6 +334,7 @@ class _MainChatPageState extends State<MainChatPage> {
           });
           break;
 
+        // Assistant text arriving
         case 'response.audio_transcript.delta':
           final delta = data['delta'] as String? ?? '';
           _partialTranscript += delta;
@@ -427,6 +344,7 @@ class _MainChatPageState extends State<MainChatPage> {
           });
           break;
 
+        // Assistant audio arriving
         case 'response.audio.delta':
           final b64 = data['delta'] as String?;
           if (b64 != null) {
@@ -437,27 +355,22 @@ class _MainChatPageState extends State<MainChatPage> {
           }
           break;
 
+        // Audio generation finished — play it
         case 'response.audio.done':
           _playResponseAudio();
           break;
 
-        case 'response.function_call_arguments.delta':
-          final delta = data['delta'] as String? ?? '';
-          _currentFunctionArgs += delta;
-          break;
-
+        // Function call from model (memory operations)
         case 'response.function_call_arguments.done':
-          _currentFunctionCallId = data['call_id'] as String? ?? '';
-          _currentFunctionName = data['name'] as String? ?? '';
-          _currentFunctionArgs = data['arguments'] as String? ?? _currentFunctionArgs;
-          debugPrint('Function call: $_currentFunctionName($_currentFunctionArgs)');
-          _handleFunctionCall();
+          _handleFunctionCall(data);
           break;
 
+        // Full response complete
         case 'response.done':
           debugPrint('Response done');
           break;
 
+        // Errors from OpenAI
         case 'error':
           final errMsg = (data['error'] as Map?)?['message'] ?? 'Erro desconhecido';
           debugPrint('OpenAI error: $errMsg');
@@ -470,118 +383,47 @@ class _MainChatPageState extends State<MainChatPage> {
   }
 
   // ====================================================
-  // Distress detection
+  // Function call handling (memory tools)
   // ====================================================
 
-  Future<void> _analyzeUserTranscript(String transcript) async {
-    if (_guardrails == null) return;
+  Future<void> _handleFunctionCall(Map<String, dynamic> data) async {
+    final callId = data['call_id'] as String? ?? '';
+    final name = data['name'] as String? ?? '';
+    final arguments = data['arguments'] as String? ?? '{}';
+
+    if (_memoryManager == null) return;
 
     try {
-      final result = _guardrails!.analyzeTranscript(transcript);
+      final result = await _memoryManager!.handleFunctionCall(name, arguments);
 
-      if (!result.isSafe) {
-        debugPrint('Safety alert: ${result.severity} — ${result.detectedPatterns}');
-
-        if ((result.severity == 'critical' || result.severity == 'high') &&
-            _alertDispatcher != null) {
-          final userId = _userId ?? 'anonymous';
-          final detector = DistressDetector();
-          final distress = detector.detectDistress(transcript);
-
-          await _alertDispatcher!.dispatchDistressAlert(
-            userId,
-            distress,
-            transcript,
-          );
-          debugPrint('Alert dispatched for severity: ${result.severity}');
-        }
-      }
-    } catch (e) {
-      debugPrint('Error in distress analysis: $e');
-    }
-  }
-
-  // ====================================================
-  // Memory function call handling
-  // ====================================================
-
-  Future<void> _handleFunctionCall() async {
-    if (_currentFunctionName.isEmpty || _memoryManager == null) {
-      if (_currentFunctionCallId.isNotEmpty) {
-        _wsSend({
-          'type': 'conversation.item.create',
-          'item': {
-            'type': 'function_call_output',
-            'call_id': _currentFunctionCallId,
-            'output': jsonEncode({
-              'success': false,
-              'error': 'Sistema de memória indisponível',
-            }),
-          },
-        });
-        _wsSend({'type': 'response.create'});
-        _currentFunctionCallId = '';
-        _currentFunctionName = '';
-        _currentFunctionArgs = '';
-      }
-      return;
-    }
-
-    try {
-      debugPrint('Handling function call: $_currentFunctionName');
-
-      final result = await _memoryManager!.handleFunctionCall(
-        _currentFunctionName,
-        _currentFunctionArgs,
-      );
-
-      debugPrint('Function result: $result');
-
+      // Send function result back to OpenAI
       _wsSend({
         'type': 'conversation.item.create',
         'item': {
           'type': 'function_call_output',
-          'call_id': _currentFunctionCallId,
+          'call_id': callId,
           'output': jsonEncode(result),
         },
       });
 
-      _wsSend({
-        'type': 'response.create',
-      });
-
-      if (_currentFunctionName == 'store_memory_fact' &&
-          result['success'] == true &&
-          _memoryRepository != null) {
-        try {
-          _memoryFacts = await _memoryRepository!.getFactsForUser();
-          debugPrint('Reloaded ${_memoryFacts.length} memory facts');
-        } catch (e) {
-          debugPrint('Error reloading memory facts: $e');
-        }
-      }
+      // Trigger a new response after function call
+      _wsSend({'type': 'response.create'});
     } catch (e) {
-      debugPrint('Error handling function call: $e');
+      debugPrint('Function call error: $e');
+    }
+  }
 
-      _wsSend({
-        'type': 'conversation.item.create',
-        'item': {
-          'type': 'function_call_output',
-          'call_id': _currentFunctionCallId,
-          'output': jsonEncode({
-            'success': false,
-            'error': 'Erro interno: $e',
-          }),
-        },
-      });
+  // ====================================================
+  // Distress detection
+  // ====================================================
 
-      _wsSend({
-        'type': 'response.create',
-      });
-    } finally {
-      _currentFunctionCallId = '';
-      _currentFunctionName = '';
-      _currentFunctionArgs = '';
+  void _checkDistress(String transcript) {
+    if (_distressDetector == null) return;
+
+    final result = _distressDetector!.detectDistress(transcript);
+    if (result.isCritical || result.isHighSeverity) {
+      debugPrint('DISTRESS DETECTED: $result');
+      // TODO: Phase 3 — send alert to family via Firebase Cloud Messaging
     }
   }
 
@@ -594,11 +436,10 @@ class _MainChatPageState extends State<MainChatPage> {
 
     _recorderStreamCtrl = StreamController<Uint8List>();
 
-    // Listen for audio data and send to OpenAI
-    // Only send audio when NOT playing back (echo cancellation)
-    _recorderStreamCtrl!.stream.listen((data) {
-      if (_wsConnected && !_isPlaying) {
-        final b64 = base64Encode(data);
+    _recorderStreamCtrl!.stream.listen((audioData) {
+      // Do not send audio to OpenAI while playing back (echo cancellation)
+      if (audioData.isNotEmpty && _wsConnected && !_isPlaying) {
+        final b64 = base64Encode(audioData);
         _wsSend({
           'type': 'input_audio_buffer.append',
           'audio': b64,
@@ -625,7 +466,7 @@ class _MainChatPageState extends State<MainChatPage> {
   }
 
   // ====================================================
-  // Audio playback (with echo cancellation)
+  // Audio playback with echo cancellation
   // ====================================================
 
   Future<void> _playResponseAudio() async {
@@ -637,42 +478,35 @@ class _MainChatPageState extends State<MainChatPage> {
     }
 
     try {
-      // --- Echo cancellation: pause recording while playing ---
+      // Pause recording before playback (echo cancellation)
       _isPlaying = true;
       await _pauseRecording();
 
-      // Convert PCM16 to WAV
       final pcm = Uint8List.fromList(_responseAudioBytes);
       final wav = AudioUtils.pcmToWav(pcm, sampleRate: 24000, channels: 1);
 
-      // Write to temp file
       final dir = await getTemporaryDirectory();
       final file = File('${dir.path}/amavel_response_${DateTime.now().millisecondsSinceEpoch}.wav');
       await file.writeAsBytes(wav);
 
-      // Play
       await _player.setFilePath(file.path);
       await _player.play();
 
-      // Wait for playback to finish
       await _player.playerStateStream.firstWhere(
         (state) => state.processingState == ja.ProcessingState.completed,
       );
 
-      // Clean up temp file
       try { await file.delete(); } catch (_) {}
 
-      // --- Echo cancellation: small delay then resume recording ---
-      // The delay ensures any residual speaker audio dissipates
-      await Future.delayed(const Duration(milliseconds: 300));
+      // Resume recording after playback with buffer clear
       _isPlaying = false;
-      await _resumeRecording();
+      await Future.delayed(const Duration(milliseconds: 300));
 
-      // Clear any audio that accumulated in the buffer during playback
-      // This prevents OpenAI from processing echo audio that was captured
+      // Clear any audio that leaked into the buffer during playback
       _wsSend({'type': 'input_audio_buffer.clear'});
 
-      // Return to listening if session still active
+      await _resumeRecording();
+
       if (_sessionActive && mounted) {
         setState(() {
           _voiceState = VoiceState.listening;
@@ -689,64 +523,95 @@ class _MainChatPageState extends State<MainChatPage> {
   }
 
   // ====================================================
-  // System prompt
+  // System prompt — Phase 1 Enriched Companion
   // ====================================================
 
   String _buildSystemPrompt() {
-    UserProfile? userProfile;
-    if (_userName != null && _userName!.isNotEmpty) {
-      userProfile = UserProfile(
-        id: _userId ?? 'anonymous',
-        displayName: _userName,
-        dateOfBirth: _userBirthdate,
-        language: 'pt-PT',
-        voicePreferences: VoicePreferences(),
-        assistantName: 'AMAVEL',
-        createdAt: DateTime.now(),
-        lastActiveAt: DateTime.now(),
-      );
-    }
+    return '''Tu és a AMAVEL — Assistente Mável, uma companheira de voz para idosos portugueses.
+A tua missão é fazer companhia, ouvir com atenção, recordar o que te contam e ajudar quem te procura a sentir-se menos só.
 
-    final basePrompt = SystemPromptBuilder.buildPrompt(
-      user: userProfile,
-      facts: _memoryFacts.isNotEmpty ? _memoryFacts : null,
-    );
+--- IDENTIDADE E PERSONALIDADE ---
+- Tens uma personalidade calorosa, curiosa e genuinamente interessada na vida do utilizador.
+- Usas ocasionalmente provérbios portugueses quando fazem sentido no contexto ("Como se costuma dizer, devagar se vai ao longe...").
+- Tens um humor suave e gentil — nunca sarcástico, nunca condescendente.
+- Mostras curiosidade genuína pela história de vida, interesses e experiências do utilizador.
+- Não tens opiniões fortes sobre política, religião ou futebol, mas ouves com interesse quando o utilizador fala destes temas.
+- Celebras pequenas vitórias: "Que bom que conseguiu dar o passeio hoje!"
 
-    final guardrailsSection = _guardrails?.getGuardrailSystemPromptSection() ?? '';
-
-    final languageRules = '''
-
---- REGRA ABSOLUTA DE LÍNGUA ---
-FALA EXCLUSIVAMENTE EM PORTUGUÊS EUROPEU (pt-PT).
-NUNCA fales em português do Brasil, espanhol, inglês, ou qualquer outra língua.
-Se o utilizador falar noutra língua, responde SEMPRE em português europeu.
-Usa vocabulário e expressões de Portugal (ex: "telemóvel" e não "celular", "autocarro" e não "ônibus").
-
---- REGRAS DE COMUNICAÇÃO (MUITO IMPORTANTE) ---
-- Trata SEMPRE o utilizador por "você" (formal e respeitoso).
-- POR DEFEITO, respostas curtas: 1 a 2 frases. Fala como numa conversa natural entre amigos.
-- Faz perguntas ao utilizador para manter o diálogo vivo e bidirecional.
-- Só dá respostas mais longas quando o utilizador faz uma pergunta complexa ou pede explicitamente mais detalhe.
-- Prefere várias trocas curtas em vez de uma resposta longa. É uma conversa, não uma palestra.
-- Fala de forma clara, simples e calorosa.
-- Nunca sejas condescendente.
-- Se não souberes algo, diz simplesmente que não sabes.
+--- LÍNGUA E COMUNICAÇÃO (CRÍTICO) ---
+- Fala EXCLUSIVAMENTE em Português Europeu (pt-PT). NUNCA uses Português do Brasil.
+- Usa SEMPRE "você" (formal). NUNCA uses "tu".
+- Usa vocabulário português europeu: "telemóvel" (não "celular"), "pequeno-almoço" (não "café da manhã"), "autocarro" (não "ônibus"), "ecrã" (não "tela").
+- Respostas curtas por defeito: 1-2 frases. Respostas mais longas só quando solicitadas ou quando a conversa justifica (contar uma história, explicar algo).
+- Fala de forma clara e pausada — lembra-te que estás a falar com idosos.
+- Evita jargão técnico, anglicismos e linguagem complicada.
 
 --- REGRAS ANTI-REPETIÇÃO (CRÍTICO) ---
 - NUNCA repitas a mesma ideia duas vezes na mesma resposta ou em respostas consecutivas.
-- Quando o utilizador pede silêncio ou descanso, responde UMA VEZ de forma breve e depois PÁRA. Não continues a falar.
-- Cada resposta deve trazer algo NOVO à conversa. Se não tens nada novo a dizer, faz uma pergunta curta ou fica em silêncio.
+- Quando o utilizador pede silêncio ou descanso, responde UMA VEZ de forma breve e depois PÁRA.
 - NUNCA fales contigo mesma. Espera SEMPRE que o utilizador fale antes de responderes.
 - Se não houve input do utilizador, NÃO respondas. O silêncio é aceitável.
-- Uma resposta = uma ideia. Não empilhes múltiplas despedidas ou reformulações da mesma mensagem.
+- Varia as tuas saudações e respostas — não uses sempre as mesmas frases.
 
---- MEMÓRIA ---
-- Quando o utilizador partilhar informação pessoal (nomes de família, aniversários, preferências, gostos), usa a função store_memory_fact para guardar.
-- No início de cada conversa, usa os factos conhecidos sobre o utilizador de forma natural.
-- Apenas guarda factos com confiança >= 0.7.
+--- ESTRATÉGIAS DE CONVERSA ---
+1. ELICITAÇÃO DE HISTÓRIAS: Faz perguntas abertas sobre a vida do utilizador.
+   - "Como era a sua terra quando era jovem?"
+   - "Qual foi a viagem mais bonita que fez?"
+   - "Conte-me mais sobre o seu trabalho — como começou?"
+2. EXPLORAÇÃO DE INTERESSES: Quando o utilizador menciona algo que gosta, explora com curiosidade.
+   - Se gosta de futebol: "Vi que o [equipa] jogou ontem. Viu o jogo?"
+   - Se gosta de cozinha: "Qual é o prato que melhor sabe fazer?"
+   - Se gosta de jardim: "Como estão as suas plantas esta semana?"
+3. ESTÍMULO COGNITIVO SUAVE: De forma natural, não como teste.
+   - Pedir para recordar detalhes de uma história já contada.
+   - Partilhar um provérbio e perguntar se conhece.
+   - Perguntar "Lembra-se do que me contou sobre [tema] na última vez?"
+4. VALIDAÇÃO EMOCIONAL: Quando o utilizador expressa emoções, valida primeiro, não tentes resolver imediatamente.
+   - "É natural sentir saudades. Quer contar-me mais sobre isso?"
+   - "Compreendo que se sinta assim. Estou aqui para ouvir."
+
+--- SISTEMA DE MEMÓRIA ---
+Tens acesso a duas ferramentas para memorizar e recuperar factos sobre o utilizador:
+- store_memory_fact: Guarda informação importante. Usa com confiança >= 0.7.
+- get_memory_facts: Recupera factos guardados.
+
+Categorias de memória disponíveis:
+- family: nomes, relações, idades, localização de familiares
+- health: condições, medicações, qualidade de sono, mobilidade
+- interest: desporto, música, televisão, hobbies, preferências alimentares
+- routine: padrões diários, horários de refeições, passeios habituais
+- history: histórias de vida, carreira, terra natal, eventos importantes
+- social: frequência de contacto social, visitas recebidas, chamadas
+- emotion: temas emocionais recorrentes (solidão, saudade, alegria)
+- preference: preferências de conversa, humor, tópicos a evitar
+
+Regras de memória:
+- Guarda novos factos SEMPRE que o utilizador partilhar informação pessoal significativa.
+- Antes de iniciar uma conversa profunda, recupera factos guardados para personalizar a interação.
+- Referencia memórias naturalmente: "Da última vez falou-me da sua neta Maria. Como está ela?"
+- Nunca digas "tenho na minha base de dados" ou linguagem técnica — faz parecer memória natural.
+
+--- GUARDRAILS DE SEGURANÇA ---
+1. SAÚDE: Nunca dês conselhos médicos concretos. Diz sempre "O melhor é falar com o seu médico sobre isso." Se alguém descrever sintomas graves (dor no peito, falta de ar, queda), recomenda ligar ao 112.
+2. FRAUDE: Se o utilizador mencionar que alguém lhe pediu dinheiro, dados bancários, ou códigos, ALERTA: "Tenha muito cuidado, isso parece ser uma tentativa de burla. Nunca partilhe dados bancários por telefone. Fale primeiro com alguém de confiança."
+3. LUTO: Se o utilizador falar de alguém que faleceu recentemente, NUNCA minimizes. Não digas "vai ficar tudo bem" nem "eles estão num lugar melhor." Em vez disso: "Sei que é muito difícil. Quer falar sobre isso? Estou aqui para ouvir."
+4. IDEAÇÃO SUICIDA: Se o utilizador expressar desejo de morrer ou não querer continuar, mantém o diálogo com empatia e sugere: "Por favor, ligue para o SOS Voz Amiga: 213 544 848. Há pessoas que querem ajudá-lo."
+5. ENCORAJAMENTO SOCIAL: Sugere contacto com família/amigos APENAS quando relevante e de forma proporcional. Reconhece que alguns utilizadores têm mobilidade reduzida — não sugiras atividades físicas impossíveis. Alternativas: "Já falou com a sua filha esta semana?" em vez de "Devia sair mais de casa."
+6. DECLÍNIO COGNITIVO: Se o utilizador se repetir muito, ficar confuso com frequência, ou esquecer coisas recentes, regista na memória (categoria emotion ou health) mas NÃO comentes diretamente. Estes padrões serão analisados em relatórios à família.
+7. LIMITES: Tu és uma companheira, não uma terapeuta, médica, ou conselheira financeira. Quando o tema ultrapassa as tuas competências, encaminha para profissionais.
 ''';
+  }
 
-    return basePrompt + guardrailsSection + languageRules;
+  // ====================================================
+  // Navigation
+  // ====================================================
+
+  void _navigateToTab(int index) {
+    if (index == 1) {
+      Navigator.pushReplacementNamed(context, AppConstants.routeMessages);
+    } else if (index == 2) {
+      Navigator.pushReplacementNamed(context, AppConstants.routeSettings);
+    }
   }
 
   // ====================================================
@@ -760,18 +625,6 @@ Usa vocabulário e expressões de Portugal (ex: "telemóvel" e não "celular", "
         _errorMessage = msg;
         _assistantMessage = msg;
       });
-    }
-  }
-
-  // ====================================================
-  // Navigation helper
-  // ====================================================
-
-  void _navigateToTab(int index) {
-    if (index == 1) {
-      Navigator.of(context).pushReplacementNamed(AppConstants.routeMessages);
-    } else if (index == 2) {
-      Navigator.of(context).pushReplacementNamed(AppConstants.routeSettings);
     }
   }
 
@@ -813,13 +666,13 @@ Usa vocabulário e expressões de Portugal (ex: "telemóvel" e não "celular", "
                       padding: const EdgeInsets.symmetric(horizontal: 20),
                       child: Column(
                         children: [
-                          if (_userMessage.isNotEmpty) ...[
+                          if (_userMessage.isNotEmpty) ...{
                             TranscriptBubble(
                               text: _userMessage,
                               isAssistant: false,
                             ),
                             const SizedBox(height: 16),
-                          ],
+                          },
                           TranscriptBubble(
                             text: _assistantMessage,
                             isAssistant: true,
@@ -854,7 +707,6 @@ Usa vocabulário e expressões de Portugal (ex: "telemóvel" e não "celular", "
               ),
             ),
 
-            // Bottom Navigation Bar with working navigation
             ElderNavBar(
               currentIndex: 0,
               onTap: _navigateToTab,
