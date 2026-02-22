@@ -11,7 +11,7 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:web_socket_channel/io.dart';
 
 import 'package:amavel_app/config/api_keys.dart';
-import 'package:amavel_app/config/constants.dart';
+import 'package:amavel_app/core/constants.dart';
 import 'package:amavel_app/config/theme.dart';
 import 'package:amavel_app/core/utils/audio_utils.dart';
 import 'package:amavel_app/domain/enums/voice_state.dart';
@@ -79,7 +79,7 @@ class _MainChatPageState extends State<MainChatPage> {
   Future<void> _initServices() async {
     try {
       final datasource = FirestoreDataSource();
-      final memoryRepo = MemoryRepository(datasource);
+      final memoryRepo = MemoryRepository(firestore: datasource);
       _memoryManager = MemoryManager(memoryRepo);
       _distressDetector = DistressDetector();
     } catch (e) {
@@ -449,7 +449,7 @@ class _MainChatPageState extends State<MainChatPage> {
 
     await _recorder.startRecorder(
       toStream: _recorderStreamCtrl!.sink,
-      codec: Codec.pcm16,
+      codec: Codec.pcm16WAV,
       sampleRate: 24000,
       numChannels: 1,
     );
