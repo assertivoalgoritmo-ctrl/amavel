@@ -449,7 +449,7 @@ class _MainChatPageState extends State<MainChatPage> {
 
     await _recorder.startRecorder(
       toStream: _recorderStreamCtrl!.sink,
-      codec: Codec.pcm16WAV,
+      codec: Codec.pcm16,
       sampleRate: 24000,
       numChannels: 1,
     );
