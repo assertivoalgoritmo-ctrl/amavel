@@ -218,7 +218,7 @@ class _MainChatPageState extends State<MainChatPage> {
       'session': {
         'modalities': ['text', 'audio'],
         'instructions': _buildSystemPrompt(),
-        'voice': 'nova',
+        'voice': 'coral',
         'input_audio_format': 'pcm16',
         'output_audio_format': 'pcm16',
         'input_audio_transcription': {
