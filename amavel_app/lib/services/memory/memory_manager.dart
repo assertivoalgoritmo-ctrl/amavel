@@ -2,43 +2,69 @@ import 'dart:convert';
 import 'package:amavel_app/data/repositories/memory_repository.dart';
 import 'package:amavel_app/domain/models/memory_fact.dart';
 
-/// Memory extraction and retrieval pipeline manager
+/// Memory extraction and retrieval pipeline manager.
+/// Phase 1: Expanded to 8 categories for richer personalization.
 class MemoryManager {
   final MemoryRepository _repository;
 
   const MemoryManager(this._repository);
 
-  /// Returns function calling tool definitions for OpenAI Realtime API
-  /// NOTE: Realtime API uses flat format (name/description/parameters at top level)
-  /// NOT the nested Chat Completions format (function: {name, description, parameters})
+  /// Valid memory categories — Phase 1 expanded set
+  static const validCategories = [
+    'family',     // nomes, relações, idades, localização de familiares
+    'health',     // condições, medicações, sono, mobilidade
+    'interest',   // desporto, música, TV, hobbies, alimentação
+    'routine',    // padrões diários, horários, passeios
+    'history',    // histórias de vida, carreira, terra natal
+    'social',     // frequência de contacto, visitas, chamadas
+    'emotion',    // temas emocionais recorrentes
+    'preference', // preferências de conversa, humor, tópicos a evitar
+  ];
+
+  /// Returns function calling tool definitions for OpenAI Realtime API.
+  /// NOTE: Realtime API uses FLAT format (name/description/parameters at top level),
+  /// NOT the nested Chat Completions format.
   List<Map<String, dynamic>> getMemoryTools() {
     return [
       {
         'type': 'function',
         'name': 'store_memory_fact',
         'description':
-            'Armazena um facto importante sobre o utilizador para referências futuras em português europeu.',
+            'Armazena um facto importante sobre o utilizador para referências futuras. '
+            'Usa sempre que o utilizador partilhar informação pessoal significativa: '
+            'nomes de família, interesses, rotinas, histórias, emoções ou preferências. '
+            'Guarda em português europeu.',
         'parameters': {
           'type': 'object',
           'properties': {
             'category': {
               'type': 'string',
-              'enum': ['family', 'health', 'preference', 'schedule', 'history'],
-              'description': 'Categoria do facto (família, saúde, preferência, rotina, história)'
+              'enum': validCategories,
+              'description':
+                  'Categoria do facto: family (família), health (saúde), '
+                  'interest (interesses/hobbies), routine (rotinas diárias), '
+                  'history (história de vida), social (contacto social), '
+                  'emotion (padrões emocionais), preference (preferências de conversa)'
             },
             'key': {
               'type': 'string',
               'description':
-                  'Chave identificadora do facto (ex: "nome_filha", "alergia_amendoim")'
+                  'Chave identificadora descritiva do facto. Exemplos: '
+                  '"nome_filha", "equipa_futebol", "hora_almoco", '
+                  '"terra_natal", "visita_filha_frequencia", '
+                  '"sentimento_solidao_recorrente", "prefere_conversas_curtas"'
             },
             'value': {
               'type': 'string',
-              'description': 'Valor descritivo do facto em português'
+              'description': 'Valor descritivo do facto em português europeu'
             },
             'confidence': {
               'type': 'number',
               'description':
-                  'Confiança na extração (0.0 a 1.0). Apenas factos com confiança >= 0.7 serão armazenados.',
+                  'Confiança na extração (0.0 a 1.0). '
+                  'Usa 0.9+ para afirmações explícitas ("A minha filha chama-se Maria"). '
+                  'Usa 0.7-0.9 para inferências razoáveis. '
+                  'Apenas factos com confiança >= 0.7 serão armazenados.',
               'minimum': 0.0,
               'maximum': 1.0
             }
@@ -50,15 +76,18 @@ class MemoryManager {
         'type': 'function',
         'name': 'get_memory_facts',
         'description':
-            'Recupera factos memorizados sobre o utilizador, opcionalmente filtrados por categoria.',
+            'Recupera factos memorizados sobre o utilizador. '
+            'Usa no início de cada conversa para personalizar a interação, '
+            'e sempre que quiseres referir algo que o utilizador já partilhou.',
         'parameters': {
           'type': 'object',
           'properties': {
             'category': {
               'type': 'string',
-              'enum': ['family', 'health', 'preference', 'schedule', 'history', 'all'],
+              'enum': [...validCategories, 'all'],
               'description':
-                  'Categoria de factos a recuperar, ou "all" para todos (padrão: all)'
+                  'Categoria de factos a recuperar, ou "all" para todos. '
+                  'Default: "all"'
             }
           }
         }
@@ -101,7 +130,6 @@ class MemoryManager {
       final value = args['value'] as String?;
       final confidence = (args['confidence'] as num?)?.toDouble() ?? 0.0;
 
-      // Validate required fields
       if (category == null || key == null || value == null) {
         return {
           'success': false,
@@ -109,7 +137,6 @@ class MemoryManager {
         };
       }
 
-      // Validate confidence threshold
       if (confidence < 0.7) {
         return {
           'success': false,
@@ -118,8 +145,6 @@ class MemoryManager {
         };
       }
 
-      // Validate category
-      const validCategories = ['family', 'health', 'preference', 'schedule', 'history'];
       if (!validCategories.contains(category)) {
         return {
           'success': false,
@@ -127,7 +152,6 @@ class MemoryManager {
         };
       }
 
-      // Store the fact
       await _repository.storeFact(
         category: category,
         key: key,
@@ -153,7 +177,6 @@ class MemoryManager {
     try {
       final category = args['category'] as String? ?? 'all';
 
-      // Retrieve facts
       final facts = await _repository.getFactsForUser(
         category: category != 'all' ? category : null,
       );
@@ -166,7 +189,6 @@ class MemoryManager {
         };
       }
 
-      // Format facts for response
       final formattedFacts = facts
           .where((f) => f.isActive)
           .map((f) => {
@@ -203,14 +225,11 @@ class MemoryManager {
 
   /// Stores a new fact with validation
   Future<void> storeFact(MemoryFact fact) async {
-    // Validate confidence threshold
     if (fact.extractionConfidence < 0.7) {
       throw ArgumentError(
           'Confidence must be >= 0.7, got ${fact.extractionConfidence}');
     }
 
-    // Validate category
-    const validCategories = ['family', 'health', 'preference', 'schedule', 'history'];
     if (!validCategories.contains(fact.category)) {
       throw ArgumentError('Invalid category: ${fact.category}');
     }
